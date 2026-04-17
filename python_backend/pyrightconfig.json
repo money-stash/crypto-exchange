@@ -1,0 +1,15 @@
+{
+  "venvPath": ".",
+  "venv": "venv",
+  "pythonVersion": "3.11",
+  "include": ["app", "bot"],
+  "exclude": ["venv", "alembic"],
+  "typeCheckingMode": "basic",
+  "reportMissingImports": false,
+  "reportMissingModuleSource": false,
+  "reportUndefinedVariable": "warning",
+  "reportAttributeAccessIssue": "none",
+  "reportOperatorIssue": "none",
+  "reportReturnType": "none",
+  "reportArgumentType": "none"
+}
