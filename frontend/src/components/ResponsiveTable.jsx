@@ -54,14 +54,15 @@ const TableSkeleton = ({ columns, rows = 5 }) => {
   );
 };
 
-const ResponsiveTable = ({ 
-  columns, 
-  data, 
+const ResponsiveTable = ({
+  columns,
+  data,
   loading = false,
   emptyMessage = "Данные отсутствуют",
   className = "",
   rowClassName = null,
-  skeletonRows = 5
+  skeletonRows = 5,
+  compact = false,
 }) => {
   if (loading) {
     return <TableSkeleton columns={columns} rows={skeletonRows} />;
@@ -76,6 +77,77 @@ const ResponsiveTable = ({
           </svg>
         </div>
         <p className="text-gray-500 dark:text-gray-500 font-medium">{emptyMessage}</p>
+      </div>
+    );
+  }
+
+  if (compact) {
+    return (
+      <div className={`bg-white dark:bg-gray-900 border border-gray-200 dark:border-gray-700 rounded-lg overflow-hidden ${className}`}>
+        {/* Compact Desktop Table */}
+        <div className="hidden lg:block overflow-x-auto">
+          <table className="min-w-full">
+            <thead>
+              <tr className="border-b border-gray-100 dark:border-gray-800">
+                {columns.map((column, index) => (
+                  <th
+                    key={index}
+                    className="px-3 py-1.5 text-left text-[10px] font-semibold text-gray-400 dark:text-gray-500 uppercase tracking-wider whitespace-nowrap"
+                    style={{ width: column.width }}
+                  >
+                    {column.header}
+                  </th>
+                ))}
+              </tr>
+            </thead>
+            <tbody className="divide-y divide-gray-100 dark:divide-gray-800">
+              {data.map((row, rowIndex) => {
+                const customRowClass = rowClassName ? rowClassName(row, rowIndex) : '';
+                return (
+                  <tr
+                    key={rowIndex}
+                    className={`hover:bg-gray-50 dark:hover:bg-gray-800/60 transition-colors duration-100 ${customRowClass}`}
+                  >
+                    {columns.map((column, colIndex) => (
+                      <td key={colIndex} className="px-3 py-1.5 text-xs text-gray-700 dark:text-gray-300 whitespace-nowrap">
+                        {column.render ? column.render(row, rowIndex) : row[column.key]}
+                      </td>
+                    ))}
+                  </tr>
+                );
+              })}
+            </tbody>
+          </table>
+        </div>
+
+        {/* Compact Mobile Cards */}
+        <div className="lg:hidden divide-y divide-gray-100 dark:divide-gray-800">
+          {data.map((row, index) => {
+            const customRowClass = rowClassName ? rowClassName(row, index) : '';
+            return (
+              <div
+                key={index}
+                className={`px-3 py-2 hover:bg-gray-50 dark:hover:bg-gray-800/60 transition-colors ${customRowClass}`}
+              >
+                <div className="space-y-1">
+                  {columns.map((column, colIndex) => {
+                    if (column.mobileHide) return null;
+                    return (
+                      <div key={colIndex} className="flex justify-between items-center">
+                        <span className="text-[10px] font-semibold text-gray-400 dark:text-gray-500 uppercase tracking-wide mr-3 shrink-0">
+                          {column.header}
+                        </span>
+                        <span className="text-xs text-gray-700 dark:text-gray-300 text-right">
+                          {column.render ? column.render(row, index) : row[column.key]}
+                        </span>
+                      </div>
+                    );
+                  })}
+                </div>
+              </div>
+            );
+          })}
+        </div>
       </div>
     );
   }
@@ -111,7 +183,7 @@ const ResponsiveTable = ({
             {data.map((row, rowIndex) => {
               const customRowClass = rowClassName ? rowClassName(row, rowIndex) : '';
               return (
-                <tr 
+                <tr
                   key={rowIndex}
                   className={`group hover:bg-gradient-to-r hover:from-blue-50/40 hover:to-indigo-50/40 dark:hover:from-blue-950/20 dark:hover:to-indigo-950/20 transition-all duration-200 ${customRowClass}`}
                 >
@@ -132,14 +204,14 @@ const ResponsiveTable = ({
         {data.map((row, index) => {
           const customRowClass = rowClassName ? rowClassName(row, index) : '';
           return (
-            <div 
-              key={index} 
+            <div
+              key={index}
               className={`group p-5 hover:bg-gradient-to-br hover:from-blue-50/30 hover:to-indigo-50/30 dark:hover:from-blue-950/15 dark:hover:to-indigo-950/15 transition-all duration-200 rounded-xl mx-2 my-2 first:mt-0 last:mb-0 border border-transparent hover:border-blue-200/30 dark:hover:border-blue-700/20 ${customRowClass}`}
             >
               <div className="space-y-3">
                 {columns.map((column, colIndex) => {
                   if (column.mobileHide) return null;
-                  
+
                   return (
                     <div key={colIndex} className="flex justify-between items-start py-1.5">
                       <span className="text-xs font-semibold text-gray-600 dark:text-gray-500 uppercase tracking-wide mr-3">

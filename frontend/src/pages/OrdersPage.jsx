@@ -754,21 +754,19 @@ const handleWorkTabChange = (tab) => {
     user?.role === 'SUPERADMIN' && {
       header: '№',
       key: 'id',
-      width: '70px',
+      width: '48px',
       render: (row) => (
-        <span className="inline-flex items-center px-2 py-1 rounded-lg font-mono text-xs font-semibold text-gray-600 dark:text-gray-400 bg-gray-100 dark:bg-gray-800">
-          {row.id}
-        </span>
+        <span className="font-mono text-gray-400 dark:text-gray-500">{row.id}</span>
       )
     },
     {
       header: 'ID',
       key: 'unique_id',
-      width: '80px',
+      width: '64px',
       render: (row) => (
         <Link
           to={`/orders/${row.id}`}
-          className="inline-flex items-center px-2.5 py-1 rounded-lg font-semibold text-blue-600 dark:text-blue-400 hover:text-white hover:bg-gradient-to-r hover:from-blue-500 hover:to-indigo-600 transition-all duration-200 hover:shadow-md"
+          className="font-mono font-semibold text-blue-600 dark:text-blue-400 hover:text-blue-800 dark:hover:text-blue-300 transition-colors"
         >
           #{row.unique_id}
         </Link>
@@ -777,37 +775,34 @@ const handleWorkTabChange = (tab) => {
     {
       header: 'Дата',
       key: 'created_at',
-      width: '140px',
+      width: '80px',
       render: (row) => (
-        <span className="font-medium text-gray-600 dark:text-gray-400">
-          {new Date(row.created_at).toLocaleDateString('ru-RU')}
+        <span className="text-gray-500 dark:text-gray-500 tabular-nums">
+          {new Date(row.created_at).toLocaleDateString('ru-RU', { day: '2-digit', month: '2-digit', year: '2-digit' })}
         </span>
       )
     },
     roleUpper !== 'OPERATOR' && {
       header: 'Пользователь',
       key: 'username',
+      width: '130px',
       render: (row) => (
-        hideCustomerIdentity ? (
-          <span className="text-sm font-medium text-gray-500 dark:text-gray-400">Скрыто</span>
-        ) : (
-          <div className="space-y-0.5">
-            <div className="font-semibold text-gray-900 dark:text-gray-200">{row.username || `ID ${row.user_id}`}</div>
-            <div className="text-xs font-medium text-gray-500 dark:text-gray-500">TG: {row.tg_id}</div>
-          </div>
-        )
+        hideCustomerIdentity
+          ? <span className="text-gray-400">—</span>
+          : <span className="font-medium text-gray-700 dark:text-gray-300 truncate max-w-[120px] block" title={row.username || `ID ${row.user_id}`}>
+              {row.username || `ID ${row.user_id}`}
+            </span>
       )
     },
     {
-      header: 'Операция',
+      header: 'Тип',
       key: 'dir',
-      width: '120px',
+      width: '76px',
       render: (row) => (
-        <span className={`inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg font-medium text-xs ${row.dir === 'BUY'
-            ? 'bg-green-100/80 dark:bg-green-900/30 text-green-700 dark:text-green-400'
-            : 'bg-red-100/80 dark:bg-red-900/30 text-red-700 dark:text-red-400'
-          }`}>
-          {row.dir === 'BUY' ? <TrendingUp className="w-3.5 h-3.5" /> : <TrendingDown className="w-3.5 h-3.5" />}
+        <span className={`inline-flex items-center gap-1 font-medium text-[11px] ${
+          row.dir === 'BUY' ? 'text-green-600 dark:text-green-400' : 'text-red-500 dark:text-red-400'
+        }`}>
+          {row.dir === 'BUY' ? <TrendingUp className="w-3 h-3" /> : <TrendingDown className="w-3 h-3" />}
           {row.dir === 'BUY' ? 'Покупка' : 'Продажа'}
         </span>
       )
@@ -815,115 +810,74 @@ const handleWorkTabChange = (tab) => {
     roleUpper !== 'OPERATOR' && {
       header: 'Монета',
       key: 'coin',
-      width: '80px',
+      width: '56px',
       render: (row) => (
-        <span className="inline-flex items-center px-2.5 py-1 rounded-lg font-mono font-semibold text-sm bg-indigo-100/80 dark:bg-indigo-900/30 text-indigo-700 dark:text-indigo-400">
-          {(user?.role === 'OPERATOR' && row.dir === 'BUY') ? 'Скрыто' : (row.coin || '—')}
+        <span className="font-mono font-semibold text-indigo-600 dark:text-indigo-400">
+          {(user?.role === 'OPERATOR' && row.dir === 'BUY') ? '—' : (row.coin || '—')}
         </span>
       )
     },
     user?.role === 'SUPERADMIN' && {
-      header: 'Обменник',
+      header: 'Бот',
       key: 'bot_id',
-      width: '140px',
+      width: '100px',
       render: (row) => (
-        row.bot_identifier ? (
-          <div className="flex flex-col space-y-1">
-            <Link
-              to={`/bots/${row.bot_id}`}
-              className="inline-flex items-center py-1 rounded-lg font-semibold text-xs text-blue-600 dark:text-blue-400 transition-all duration-200"
-            >
-              {row.bot_identifier}
-            </Link>
-            <span className="text-xs font-medium text-gray-500 dark:text-gray-500">
-              ID: {row.bot_owner_id}
-            </span>
-          </div>
-        ) : (
-          <span className="text-gray-400 dark:text-gray-500">—</span>
-        )
+        row.bot_identifier
+          ? <Link to={`/bots/${row.bot_id}`} className="text-blue-600 dark:text-blue-400 hover:underline truncate block max-w-[90px]">{row.bot_identifier}</Link>
+          : <span className="text-gray-400">—</span>
       )
     },
     {
-      header: 'Количество / Сумма',
+      header: 'Сумма',
       key: 'amount_sum',
-      width: '160px',
+      width: '170px',
       render: (row) => {
         const isOperatorBuy = user?.role === 'OPERATOR' && row.dir === 'BUY';
         return (
-          <div className="space-y-1">
-            <div className="font-mono font-medium text-sm text-gray-700 dark:text-gray-400">
-              {isOperatorBuy
-                ? 'Скрыто'
-                : `${parseFloat(row.amount_coin || 0).toFixed(8)} ${row.coin || ''}`}
-            </div>
-            <div className="inline-flex items-center gap-1 font-semibold text-sm text-gray-800 dark:text-gray-300">
-              {parseFloat(row.sum_rub || 0).toLocaleString('ru-RU')}
-              <span className="text-green-600 dark:text-green-500">₽</span>
-            </div>
-            {isOperatorBuy && (
-              <div className="text-xs font-semibold text-blue-600 dark:text-blue-400">
-                {row.usdt_due ? `${Number(row.usdt_due).toFixed(4)} USDT` : 'USDT: —'}
-              </div>
-            )}
-          </div>
+          <span className="font-mono text-gray-700 dark:text-gray-300 tabular-nums">
+            {isOperatorBuy
+              ? <span className="text-blue-600 dark:text-blue-400 font-semibold">{row.usdt_due ? `${Number(row.usdt_due).toFixed(4)} USDT` : '—'}</span>
+              : <>
+                  <span className="text-gray-500 dark:text-gray-500">{parseFloat(row.amount_coin || 0).toFixed(6)} {row.coin}</span>
+                  <span className="text-gray-300 dark:text-gray-600 mx-1">/</span>
+                  <span className="font-semibold">{parseFloat(row.sum_rub || 0).toLocaleString('ru-RU')} ₽</span>
+                </>
+            }
+          </span>
         );
       }
     },
     {
       header: 'Статус',
       key: 'status',
-      width: '180px',
+      width: '160px',
       render: (row) => getStatusBadge(row.status, row)
     },
     {
       header: 'Оператор',
       key: 'support_id',
-      width: '140px',
+      width: '120px',
       mobileHide: true,
       render: (row) => (
-        <div className="flex items-center gap-2">
-          {row.support_id ? (
-            <div className="inline-flex flex-col items-start px-2.5 py-1.5 rounded-lg bg-green-50/80 dark:bg-green-900/20 border border-green-200/30 dark:border-green-700/30">
-              {/* <span className="text-xs font-medium text-green-700 dark:text-green-400 tracking-wide">
-                Назначен
-              </span> */}
-              <span className="text-sm font-semibold text-gray-800 dark:text-gray-300">
-                {row.support_username || `ID ${row.support_id}`}
-              </span>
-            </div>
-          ) : (
-            <div className="inline-flex items-center px-2.5 py-1.5 rounded-lg bg-gray-100/80 dark:bg-gray-800/50 border border-gray-300/30 dark:border-gray-600/30">
-              <span className="text-xs font-medium text-gray-500 dark:text-gray-500 tracking-wide">
-                Не назначен
-              </span>
-            </div>
-          )}
+        <div className="flex items-center gap-1.5">
+          {row.support_id
+            ? <span className="font-medium text-gray-700 dark:text-gray-300 truncate max-w-[90px]">{row.support_username || `ID ${row.support_id}`}</span>
+            : <span className="text-gray-400 dark:text-gray-500">—</span>
+          }
           {row.unread_messages > 0 && (
-            <div className="relative hidden lg:block">
-              <div className="w-8 h-8 rounded-lg bg-gradient-to-br from-blue-500 to-indigo-600 flex items-center justify-center shadow-md shadow-blue-500/20">
-                <svg className="w-4 h-4 text-white" fill="currentColor" viewBox="0 0 20 20">
-                  <path d="M2.003 5.884L10 9.882l7.997-3.998A2 2 0 0016 4H4a2 2 0 00-1.997 1.884z"></path>
-                  <path d="M18 8.118l-8 4-8-4V14a2 2 0 002 2h12a2 2 0 002-2V8.118z"></path>
-                </svg>
-              </div>
-              <div className="absolute -top-1 -right-1 w-5 h-5 bg-gradient-to-br from-red-500 to-red-600 rounded-full flex items-center justify-center shadow-md ring-2 ring-white dark:ring-gray-900">
-                <span className="text-white text-xs font-semibold">
-                  {row.unread_messages > 9 ? '9+' : row.unread_messages}
-                </span>
-              </div>
-            </div>
+            <span className="inline-flex items-center justify-center min-w-[16px] h-4 px-1 bg-blue-500 text-white text-[10px] font-bold rounded-full">
+              {row.unread_messages > 9 ? '9+' : row.unread_messages}
+            </span>
           )}
         </div>
       )
     },
     {
-      header: 'Действия',
+      header: '',
       key: 'actions',
-      width: '120px',
+      width: '80px',
       render: (row) => (
-        <div className="flex space-x-2 justify-end lg:justify-start">
-          {/* показываем кнопку "Взять" только для неназначенных заявок в нужном статусе */}
+        <div className="flex items-center gap-1 justify-end">
           {((row.status === 'CREATED' && row.unread_messages > 0) || row.status === 'QUEUED') && (
             <ActionButton
               type="assign"
@@ -935,28 +889,8 @@ const handleWorkTabChange = (tab) => {
           )}
           {(user?.role !== 'OPERATOR' || user?.id === row.support_id) && (
             <Link to={`/orders/${row.id}`}>
-              <ActionButton
-                type="view"
-                variant="default"
-                title="Подробнее"
-              />
+              <ActionButton type="view" variant="default" title="Подробнее" />
             </Link>
-          )}
-          {/* Индикатор сообщений для мобильной версии */}
-          {row.unread_messages > 0 && (
-            <div className="relative lg:hidden ml-2">
-              <div className="w-8 h-8 rounded-lg bg-gradient-to-br from-blue-500 to-indigo-600 flex items-center justify-center shadow-md shadow-blue-500/20">
-                <svg className="w-4 h-4 text-white" fill="currentColor" viewBox="0 0 20 20">
-                  <path d="M2.003 5.884L10 9.882l7.997-3.998A2 2 0 0016 4H4a2 2 0 00-1.997 1.884z"></path>
-                  <path d="M18 8.118l-8 4-8-4V14a2 2 0 002 2h12a2 2 0 002-2V8.118z"></path>
-                </svg>
-              </div>
-              <div className="absolute -top-1 -right-1 w-5 h-5 bg-gradient-to-br from-red-500 to-red-600 rounded-full flex items-center justify-center shadow-md ring-2 ring-white dark:ring-gray-900">
-                <span className="text-white text-xs font-semibold">
-                  {row.unread_messages > 9 ? '9+' : row.unread_messages}
-                </span>
-              </div>
-            </div>
           )}
         </div>
       )
@@ -1153,13 +1087,14 @@ const handleWorkTabChange = (tab) => {
         </div>
 
         <ResponsiveTable
+          compact
           columns={columns}
           data={orders}
           loading={loading}
           emptyMessage="Заявок не найдено"
           rowClassName={(row) =>
             row.unread_messages > 0
-              ? 'bg-blue-50 dark:bg-blue-900/20 border-l-4 border-blue-500'
+              ? 'bg-blue-50/60 dark:bg-blue-900/20 border-l-2 border-blue-500'
               : ''
           }
         />
