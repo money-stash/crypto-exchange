@@ -8,6 +8,7 @@ import BotRequisiteForm from '../components/BotRequisiteForm';
 import OrderChat from '../components/OrderChat';
 import OperatorManagerChat from '../components/OperatorManagerChat';
 import OrderProgressBar from '../components/OrderProgressBar';
+import CancelOrderModal from '../components/CancelOrderModal';
 import { useAuth } from '../hooks/useAuth';
 import AnimatedTimer from '../components/AnimatedTimer';
 import socketService from '../services/socketService';
@@ -130,6 +131,7 @@ const OrderDetailsPage = () => {
   const [transactionHash, setTransactionHash] = useState('');
   const [receiptFile, setReceiptFile] = useState(null);
   const [showCompletionModal, setShowCompletionModal] = useState(false);
+  const [showCancelModal, setShowCancelModal] = useState(false);
   const [showRequisitesModal, setShowRequisitesModal] = useState(false);
   const [activeChatTab, setActiveChatTab] = useState('client');
   const [showRequisitesEditForm, setShowRequisitesEditForm] = useState(false);
@@ -519,24 +521,18 @@ const OrderDetailsPage = () => {
     }
   };
 
-  const handleCancelOrder = async () => {
+  const handleCancelOrder = () => {
     if (operatorCancelBlockReason) {
       toast.error(operatorCancelBlockReason);
       return;
     }
+    setShowCancelModal(true);
+  };
 
-    const confirmed = await confirm({
-      title: 'Отмена заявки',
-      message: 'Вы уверены, что хотите отменить заявку?',
-      confirmText: 'Отменить',
-      cancelText: 'Назад',
-      type: 'danger'
-    });
-
-    if (!confirmed) return;
-
+  const handleCancelConfirm = async (reason) => {
+    setShowCancelModal(false);
     try {
-      const response = await ordersApi.cancelOrder(id, { reason: 'Отменено оператором' });
+      const response = await ordersApi.cancelOrder(id, { reason });
       toast.success('Заявка отменена');
       setOrder(response.data.orderDetails);
     } catch (error) {
@@ -932,6 +928,12 @@ const managementUsdtRate = (() => {
                   <div className="flex justify-between">
                     <span className="text-sm font-medium text-gray-600 dark:text-gray-500">Завершена:</span>
                     <span className="text-sm text-gray-700 dark:text-gray-400">{new Date(order.completed_at).toLocaleString('ru-RU')}</span>
+                  </div>
+                )}
+                {order.status === 'CANCELLED' && order.cancel_reason && (
+                  <div className="flex flex-col gap-1 p-3 rounded-xl bg-red-50 dark:bg-red-900/15 border border-red-200/60 dark:border-red-800/40">
+                    <span className="text-xs font-semibold text-red-600 dark:text-red-400 uppercase tracking-wide">Причина отмены</span>
+                    <span className="text-sm text-red-700 dark:text-red-300">{order.cancel_reason}</span>
                   </div>
                 )}
 
@@ -1702,6 +1704,12 @@ const managementUsdtRate = (() => {
         </div>
       )}
       </div>
+
+      <CancelOrderModal
+        isOpen={showCancelModal}
+        onClose={() => setShowCancelModal(false)}
+        onConfirm={handleCancelConfirm}
+      />
     </PageTransition>
   );
 };

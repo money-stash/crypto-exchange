@@ -145,14 +145,22 @@ const BotsPage = () => {
     const confirmed = await confirm({
       title: 'Удаление бота',
       message: 'Вы уверены, что хотите удалить этого бота?',
-      confirmText: 'Удалить',
+      confirmText: 'Да, удалить',
       cancelText: 'Отмена',
       type: 'danger'
     });
-    
-    if (!confirmed) {
-      return;
-    }
+
+    if (!confirmed) return;
+
+    const confirmedTwice = await confirm({
+      title: 'Подтвердите удаление',
+      message: 'Бот будет остановлен и удалён без возможности восстановления. Точно продолжить?',
+      confirmText: 'Удалить окончательно',
+      cancelText: 'Отмена',
+      type: 'danger'
+    });
+
+    if (!confirmedTwice) return;
 
     try {
       await botsApi.deleteBot(id);

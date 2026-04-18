@@ -2,6 +2,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query, UploadFile, File, 
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession
 from typing import Optional
+from pydantic import BaseModel
 import logging, os, shutil, uuid
 
 from app.database import get_db
@@ -225,9 +226,14 @@ async def get_order_details(
 # POST /:id/cancel
 # ---------------------------------------------------------------------------
 
+class CancelOrderBody(BaseModel):
+    reason: Optional[str] = None
+
+
 @router.post("/{order_id}/cancel")
 async def cancel_order(
     order_id: int,
+    body: Optional[CancelOrderBody] = None,
     current_user: Support = Depends(require_auth),
     db: AsyncSession = Depends(get_db),
 ):
@@ -245,9 +251,10 @@ async def cancel_order(
         if order.get("status") == "AWAITING_HASH":
             raise HTTPException(403, "После подтверждения оплаты оператором отмена заявки недоступна")
 
+    cancel_reason = ((body.reason if body else None) or "").strip() or "Отменено оператором"
     await db.execute(
-        text("UPDATE orders SET status = 'CANCELLED', updated_at = NOW() WHERE id = :id"),
-        {"id": order_id},
+        text("UPDATE orders SET status = 'CANCELLED', cancel_reason = :reason, updated_at = NOW() WHERE id = :id"),
+        {"id": order_id, "reason": cancel_reason},
     )
     updated = await db.execute(
         text(f"{ORDER_SELECT} WHERE o.id = :id"), {"id": order_id}
