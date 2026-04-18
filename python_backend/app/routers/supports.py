@@ -5,6 +5,8 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 from typing import Optional
 
+from app.services import operator_debt_service as debt_svc
+
 from app.database import get_db
 from app.middleware.auth import get_current_user, require_roles
 from app.models.support import Support
@@ -73,38 +75,101 @@ async def get_operators_rating(
 
 
 # ---------------------------------------------------------------------------
-# GET /me/debt  (заглушки — будет реализовано в OperatorDebtService)
+# GET /me/debt
 # ---------------------------------------------------------------------------
 
 @router.get("/me/debt")
-async def get_my_debt(current_user: Support = Depends(require_roles("OPERATOR"))):
-    # TODO: OperatorDebtService.get_aggregate_debt(current_user.id)
-    raise HTTPException(status_code=501, detail="Not implemented yet")
+async def get_my_debt(
+    current_user: Support = Depends(require_roles("OPERATOR")),
+    db: AsyncSession = Depends(get_db),
+):
+    return await debt_svc.get_aggregate_debt(db, current_user.id)
 
+
+# ---------------------------------------------------------------------------
+# POST /me/debt/intents
+# ---------------------------------------------------------------------------
 
 @router.post("/me/debt/intents", status_code=201)
-async def create_my_debt_intent(current_user: Support = Depends(require_roles("OPERATOR"))):
-    raise HTTPException(status_code=501, detail="Not implemented yet")
+async def create_my_debt_intent(
+    body: dict,
+    current_user: Support = Depends(require_roles("OPERATOR")),
+    db: AsyncSession = Depends(get_db),
+):
+    requested = body.get("requested_usdt")
+    if requested is None:
+        raise HTTPException(400, "requested_usdt is required")
+    try:
+        intent = await debt_svc.create_payment_intent(db, current_user.id, float(requested))
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+    return intent
 
+
+# ---------------------------------------------------------------------------
+# GET /me/debt/intents/{intent_id}
+# ---------------------------------------------------------------------------
 
 @router.get("/me/debt/intents/{intent_id}")
-async def get_my_debt_intent_status(intent_id: int, current_user: Support = Depends(require_roles("OPERATOR"))):
-    raise HTTPException(status_code=501, detail="Not implemented yet")
+async def get_my_debt_intent_status(
+    intent_id: int,
+    current_user: Support = Depends(require_roles("OPERATOR")),
+    db: AsyncSession = Depends(get_db),
+):
+    try:
+        return await debt_svc.get_intent_status(db, current_user.id, intent_id)
+    except ValueError as e:
+        raise HTTPException(404, str(e))
 
+
+# ---------------------------------------------------------------------------
+# POST /me/debt/payments  (ручной ввод tx_hash оператором)
+# ---------------------------------------------------------------------------
 
 @router.post("/me/debt/payments", status_code=201)
-async def create_my_debt_payment(current_user: Support = Depends(require_roles("OPERATOR"))):
-    raise HTTPException(status_code=501, detail="Not implemented yet")
+async def create_my_debt_payment(
+    body: dict,
+    current_user: Support = Depends(require_roles("OPERATOR")),
+    db: AsyncSession = Depends(get_db),
+):
+    intent_id = body.get("intent_id")
+    tx_hash = body.get("tx_hash")
+    if not intent_id or not tx_hash:
+        raise HTTPException(400, "intent_id and tx_hash are required")
+    try:
+        payment = await debt_svc._validate_and_create_payment(
+            db, current_user.id, int(intent_id), str(tx_hash),
+            float(body["declared_amount_usdt"]) if body.get("declared_amount_usdt") else None,
+        )
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+    return payment
 
+
+# ---------------------------------------------------------------------------
+# GET /me/debt/payments
+# ---------------------------------------------------------------------------
 
 @router.get("/me/debt/payments")
-async def get_my_debt_payments(current_user: Support = Depends(require_roles("OPERATOR"))):
-    raise HTTPException(status_code=501, detail="Not implemented yet")
+async def get_my_debt_payments(
+    limit: int = Query(500, ge=1, le=500),
+    current_user: Support = Depends(require_roles("OPERATOR")),
+    db: AsyncSession = Depends(get_db),
+):
+    return await debt_svc.get_payments_history(db, support_id=current_user.id, limit=limit)
 
+
+# ---------------------------------------------------------------------------
+# GET /debt/payments/history  (менеджер/суперадмин)
+# ---------------------------------------------------------------------------
 
 @router.get("/debt/payments/history")
-async def get_debt_payments_history(current_user: Support = Depends(require_manager_up)):
-    raise HTTPException(status_code=501, detail="Not implemented yet")
+async def get_debt_payments_history(
+    limit: int = Query(500, ge=1, le=500),
+    current_user: Support = Depends(require_manager_up),
+    db: AsyncSession = Depends(get_db),
+):
+    return await debt_svc.get_payments_history(db, support_id=None, limit=limit)
 
 
 # ---------------------------------------------------------------------------
@@ -306,32 +371,89 @@ async def get_credentials(
 
 
 # ---------------------------------------------------------------------------
-# GET /:id/debt  (заглушка)
+# GET /:id/debt
 # ---------------------------------------------------------------------------
 
 @router.get("/{support_id}/debt")
-async def get_support_debt(support_id: int, current_user: Support = Depends(require_superadmin)):
-    raise HTTPException(status_code=501, detail="Not implemented yet")
+async def get_support_debt(
+    support_id: int,
+    current_user: Support = Depends(require_superadmin),
+    db: AsyncSession = Depends(get_db),
+):
+    return await debt_svc.get_aggregate_debt(db, support_id)
 
+
+# ---------------------------------------------------------------------------
+# POST /:id/debt/write-off
+# ---------------------------------------------------------------------------
 
 @router.post("/{support_id}/debt/write-off")
-async def write_off_support_debt(support_id: int, current_user: Support = Depends(require_superadmin)):
-    raise HTTPException(status_code=501, detail="Not implemented yet")
+async def write_off_support_debt(
+    support_id: int,
+    body: Optional[dict] = None,
+    current_user: Support = Depends(require_superadmin),
+    db: AsyncSession = Depends(get_db),
+):
+    requested = (body or {}).get("requested_usdt")
+    try:
+        return await debt_svc.write_off_debt_by_superadmin(
+            db, support_id,
+            requested_usdt=float(requested) if requested is not None else None,
+            actor_id=current_user.id,
+        )
+    except ValueError as e:
+        raise HTTPException(400, str(e))
 
+
+# ---------------------------------------------------------------------------
+# POST /:id/debt/intents
+# ---------------------------------------------------------------------------
 
 @router.post("/{support_id}/debt/intents", status_code=201)
-async def create_support_debt_intent(support_id: int, current_user: Support = Depends(require_superadmin)):
-    raise HTTPException(status_code=501, detail="Not implemented yet")
+async def create_support_debt_intent(
+    support_id: int,
+    body: dict,
+    current_user: Support = Depends(require_superadmin),
+    db: AsyncSession = Depends(get_db),
+):
+    requested = body.get("requested_usdt")
+    if requested is None:
+        raise HTTPException(400, "requested_usdt is required")
+    try:
+        return await debt_svc.create_payment_intent(db, support_id, float(requested))
+    except ValueError as e:
+        raise HTTPException(400, str(e))
 
+
+# ---------------------------------------------------------------------------
+# GET /:id/debt/intents/{intent_id}
+# ---------------------------------------------------------------------------
 
 @router.get("/{support_id}/debt/intents/{intent_id}")
-async def get_support_debt_intent_status(support_id: int, intent_id: int, current_user: Support = Depends(require_superadmin)):
-    raise HTTPException(status_code=501, detail="Not implemented yet")
+async def get_support_debt_intent_status(
+    support_id: int,
+    intent_id: int,
+    current_user: Support = Depends(require_superadmin),
+    db: AsyncSession = Depends(get_db),
+):
+    try:
+        return await debt_svc.get_intent_status(db, support_id, intent_id)
+    except ValueError as e:
+        raise HTTPException(404, str(e))
 
+
+# ---------------------------------------------------------------------------
+# GET /:id/debt/payments
+# ---------------------------------------------------------------------------
 
 @router.get("/{support_id}/debt/payments")
-async def get_support_debt_payments(support_id: int, current_user: Support = Depends(require_superadmin)):
-    raise HTTPException(status_code=501, detail="Not implemented yet")
+async def get_support_debt_payments(
+    support_id: int,
+    limit: int = Query(500, ge=1, le=500),
+    current_user: Support = Depends(require_superadmin),
+    db: AsyncSession = Depends(get_db),
+):
+    return await debt_svc.get_payments_history(db, support_id=support_id, limit=limit)
 
 
 # ---------------------------------------------------------------------------

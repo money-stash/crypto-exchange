@@ -130,7 +130,11 @@ const BotsPage = () => {
   const handleToggleStatus = async (id) => {
     try {
       await botsApi.toggleBotStatus(id);
-      fetchBots();
+      await fetchBots();
+      // fetchBots updates bots state → useEffect triggers fetchBotsStatuses,
+      // but we also force a status refresh after a short delay so the
+      // BotManager has time to start/stop polling.
+      setTimeout(() => fetchBotsStatuses(), 1500);
     } catch (error) {
       console.error('Failed to toggle bot status:', error);
       setError('Ошибка изменения статуса');

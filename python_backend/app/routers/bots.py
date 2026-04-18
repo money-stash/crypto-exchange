@@ -1,5 +1,7 @@
+import math
+
 from fastapi import APIRouter, Depends, HTTPException, Query
-from sqlalchemy import select, text
+from sqlalchemy import select, text, func
 from sqlalchemy.ext.asyncio import AsyncSession
 from typing import Optional
 from pydantic import BaseModel
@@ -121,9 +123,16 @@ async def get_bots(
     current_user: Support = Depends(require_bot_mgmt),
     db: AsyncSession = Depends(get_db),
 ):
+    base_filter = Bot.owner_id == current_user.id if current_user.role == "EX_ADMIN" else None
+
+    count_q = select(func.count()).select_from(Bot)
+    if base_filter is not None:
+        count_q = count_q.where(base_filter)
+    total: int = (await db.execute(count_q)).scalar() or 0
+
     query = select(Bot)
-    if current_user.role == "EX_ADMIN":
-        query = query.where(Bot.owner_id == current_user.id)
+    if base_filter is not None:
+        query = query.where(base_filter)
     query = query.offset((page - 1) * limit).limit(limit)
 
     result = await db.execute(query)
@@ -140,7 +149,7 @@ async def get_bots(
             "owner_id": b.owner_id, "created_at": b.created_at,
             "start_message": b.start_message, "contacts_message": b.contacts_message,
         })
-    return {"data": bot_list}
+    return {"data": {"bots": bot_list, "total": total, "pages": math.ceil(total / limit) if total else 1}}
 
 
 # ---------------------------------------------------------------------------
@@ -278,6 +287,8 @@ async def delete_bot(
     db: AsyncSession = Depends(get_db),
 ):
     bot = await _check_bot_access(bot_id, current_user, db, write=True)
+    # Stop the bot first so polling is terminated before the DB record is gone
+    await bot_manager.stop_bot(bot_id)
     await db.delete(bot)
     return {"message": "Bot deleted successfully"}
 
