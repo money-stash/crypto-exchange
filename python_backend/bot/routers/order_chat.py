@@ -105,6 +105,11 @@ async def handle_order_chat_message(message: Message, state: FSMContext, bot_con
         )
         msg = dict(msg_row.mappings().one())
 
+    logger.info(
+        f"[BOT] user message saved: msg_id={msg_id} order_id={order_id} "
+        f"bot_id={order.bot_id} support_id={order.support_id}"
+    )
+
     # Emit socket event to notify operators on the panel
     try:
         await sio.emit_order_message({
@@ -113,4 +118,4 @@ async def handle_order_chat_message(message: Message, state: FSMContext, bot_con
             "support_id": order.support_id,
         })
     except Exception as e:
-        logger.warning(f"Failed to emit order:message for order {order_id}: {e}")
+        logger.warning(f"[BOT] Failed to emit order:message for order {order_id}: {e}")

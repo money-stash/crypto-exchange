@@ -12,14 +12,15 @@ import { useAuth } from '../hooks/useAuth';
 import AnimatedTimer from '../components/AnimatedTimer';
 import socketService from '../services/socketService';
 import {
-  ChevronLeft, 
-  XCircle, 
-  FileText, 
-  Clock, 
-  RotateCw, 
-  Zap, 
+  ChevronLeft,
+  XCircle,
+  FileText,
+  Clock,
+  RotateCw,
+  Zap,
   Check,
-  MessageCircle
+  MessageCircle,
+  Pencil
 } from 'lucide-react';
 import PageTransition from '../components/PageTransition';
 
@@ -135,6 +136,10 @@ const OrderDetailsPage = () => {
   const [requisitesHistory, setRequisitesHistory] = useState([]);
   const [requisitesHistoryLoading, setRequisitesHistoryLoading] = useState(false);
   const [completingOrder, setCompletingOrder] = useState(false);
+  const [showAmountEdit, setShowAmountEdit] = useState(false);
+  const [amountEditRub, setAmountEditRub] = useState('');
+  const [amountEditCoin, setAmountEditCoin] = useState('');
+  const [amountEditSaving, setAmountEditSaving] = useState(false);
   const roleUpper = (user?.role || '').toUpperCase();
   const hideCustomerIdentity = roleUpper === 'OPERATOR';
   const isOperatorRole = roleUpper === 'OPERATOR';
@@ -184,6 +189,10 @@ const OrderDetailsPage = () => {
   const showOperatorRequisitesQuickAction =
     isOperatorRole &&
     hideClientChatForOperator;
+  const canEditAmount =
+    order &&
+    !['COMPLETED', 'CANCELLED'].includes(order.status) &&
+    (isSuperAdminRole || isManagerRole || (isOperatorRole && Number(order?.support_id || 0) === Number(user?.id || 0)));
   const operatorSentMessagesCount = Number(order?.support_sent_messages || 0);
   const operatorCancelBlockReason = isOperatorRole
     ? (
@@ -569,6 +578,54 @@ const OrderDetailsPage = () => {
 
       toast.error(`Ошибка при назначении заявки: ${errorMessage}`);
       console.error('Take order error:', error);
+    }
+  };
+
+  const openAmountEdit = () => {
+    setAmountEditRub(order?.sum_rub != null ? String(parseFloat(order.sum_rub)) : '');
+    setAmountEditCoin(order?.amount_coin != null ? String(parseFloat(order.amount_coin)) : '');
+    setShowAmountEdit(true);
+  };
+
+  const handleAmountRubChange = (val) => {
+    setAmountEditRub(val);
+    const rub = parseFloat(val);
+    const rate = parseFloat(order?.rate_rub || 0);
+    if (!isNaN(rub) && rub > 0 && rate > 0) {
+      setAmountEditCoin(String((rub / rate).toFixed(8)));
+    } else {
+      setAmountEditCoin('');
+    }
+  };
+
+  const handleAmountCoinChange = (val) => {
+    setAmountEditCoin(val);
+    const coin = parseFloat(val);
+    const rate = parseFloat(order?.rate_rub || 0);
+    if (!isNaN(coin) && coin > 0 && rate > 0) {
+      setAmountEditRub(String((coin * rate).toFixed(2)));
+    } else {
+      setAmountEditRub('');
+    }
+  };
+
+  const handleAmountSave = async () => {
+    const rubVal = parseFloat(amountEditRub);
+    if (isNaN(rubVal) || rubVal <= 0) {
+      toast.error('Введите корректную сумму в рублях');
+      return;
+    }
+    setAmountEditSaving(true);
+    try {
+      const response = await ordersApi.updateOrderAmount(id, { sum_rub: rubVal });
+      setOrder(response.data.order);
+      setShowAmountEdit(false);
+      toast.success('Сумма сделки обновлена');
+    } catch (error) {
+      const msg = error?.response?.data?.detail || error?.response?.data?.error || 'Ошибка при сохранении суммы';
+      toast.error(msg);
+    } finally {
+      setAmountEditSaving(false);
     }
   };
 
@@ -1003,10 +1060,72 @@ const managementUsdtRate = (() => {
                         <span className="text-sm font-semibold text-green-600 dark:text-green-400">-{(parseFloat(order.user_discount) * 100).toFixed(2)}%</span>
                       </div>
                     )}
-                    <div className="flex justify-between pt-3 border-t-2 border-gray-200 dark:border-gray-700">
+                    <div className="flex justify-between items-center pt-3 border-t-2 border-gray-200 dark:border-gray-700">
                       <span className="text-base font-semibold text-gray-800 dark:text-gray-300">Итого:</span>
-                      <span className="text-lg font-bold text-gray-900 dark:text-gray-200">{parseFloat(order.sum_rub).toLocaleString('ru-RU')} {RUBLE_SIGN}</span>
+                      <div className="flex items-center gap-2">
+                        <span className="text-lg font-bold text-gray-900 dark:text-gray-200">{parseFloat(order.sum_rub).toLocaleString('ru-RU')} {RUBLE_SIGN}</span>
+                        {canEditAmount && !showAmountEdit && (
+                          <button
+                            type="button"
+                            onClick={openAmountEdit}
+                            title="Изменить сумму"
+                            className="p-1 rounded-lg text-gray-400 hover:text-blue-600 dark:hover:text-blue-400 hover:bg-blue-50 dark:hover:bg-blue-900/30 transition-colors"
+                          >
+                            <Pencil className="w-3.5 h-3.5" />
+                          </button>
+                        )}
+                      </div>
                     </div>
+                    {canEditAmount && showAmountEdit && (
+                      <div className="mt-3 p-4 rounded-xl border border-blue-200 dark:border-blue-700/50 bg-blue-50/60 dark:bg-blue-900/20 space-y-3">
+                        <p className="text-xs font-semibold text-blue-700 dark:text-blue-300 uppercase tracking-wide">Изменить сумму сделки</p>
+                        <div className="space-y-2">
+                          <div>
+                            <label className="text-xs text-gray-600 dark:text-gray-400 font-medium block mb-1">Сумма (RUB)</label>
+                            <input
+                              type="number"
+                              min="0"
+                              step="0.01"
+                              value={amountEditRub}
+                              onChange={(e) => handleAmountRubChange(e.target.value)}
+                              className="w-full px-3 py-2 text-sm rounded-lg border border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-800 text-gray-900 dark:text-gray-100 focus:outline-none focus:ring-2 focus:ring-blue-500/50 focus:border-blue-500"
+                              placeholder="Сумма в рублях"
+                            />
+                          </div>
+                          <div>
+                            <label className="text-xs text-gray-600 dark:text-gray-400 font-medium block mb-1">Количество ({order.coin})</label>
+                            <input
+                              type="number"
+                              min="0"
+                              step="0.00000001"
+                              value={amountEditCoin}
+                              onChange={(e) => handleAmountCoinChange(e.target.value)}
+                              className="w-full px-3 py-2 text-sm rounded-lg border border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-800 text-gray-900 dark:text-gray-100 focus:outline-none focus:ring-2 focus:ring-blue-500/50 focus:border-blue-500"
+                              placeholder={`Количество ${order.coin}`}
+                            />
+                          </div>
+                          <p className="text-xs text-gray-500 dark:text-gray-400">Курс: {parseFloat(order.rate_rub).toLocaleString('ru-RU')} ₽</p>
+                        </div>
+                        <div className="flex gap-2 pt-1">
+                          <button
+                            type="button"
+                            onClick={handleAmountSave}
+                            disabled={amountEditSaving}
+                            className="flex-1 py-2 px-3 text-sm font-semibold bg-blue-600 hover:bg-blue-700 disabled:bg-blue-400 text-white rounded-lg transition-colors"
+                          >
+                            {amountEditSaving ? 'Сохранение...' : 'Сохранить'}
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => setShowAmountEdit(false)}
+                            disabled={amountEditSaving}
+                            className="py-2 px-3 text-sm font-semibold bg-gray-200 dark:bg-gray-700 hover:bg-gray-300 dark:hover:bg-gray-600 text-gray-700 dark:text-gray-300 rounded-lg transition-colors"
+                          >
+                            Отмена
+                          </button>
+                        </div>
+                      </div>
+                    )}
                   </>
                 )}
                 {/* Хеш транзакции для завершенных покупок */}

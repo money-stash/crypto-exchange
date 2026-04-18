@@ -503,21 +503,14 @@ const OperatorManagerChat = ({
       setSending(true);
       setNewMessage('');
       try {
-      const payload = attachmentToSend
-        ? (() => {
-          const formData = new FormData();
-          formData.append('message', text);
-          formData.append('attachment', attachmentToSend);
-          return formData;
-        })()
-        : { message: text };
+      const payload = new FormData();
+      payload.append('message', text);
+      if (attachmentToSend) {
+        payload.append('attachment', attachmentToSend);
+      }
       const linkedOrderId = Number(linkedOrder?.id || 0);
       if (orderContextEnabled && linkedOrderId > 0) {
-        if (payload instanceof FormData) {
-          payload.append('order_id', String(linkedOrderId));
-        } else {
-          payload.order_id = linkedOrderId;
-        }
+        payload.append('order_id', String(linkedOrderId));
       }
 
       const response = await operatorManagerChatsApi.sendMessage(operatorId, payload);

@@ -11,7 +11,10 @@ similar commands Node.js versions — frontend not changed:
 
 import datetime
 import decimal
+import logging
 import socketio
+
+logger = logging.getLogger(__name__)
 
 sio: socketio.AsyncServer | None = None
 
@@ -93,14 +96,24 @@ async def emit_order_deleted(order_id: int) -> None:
 
 async def emit_order_message(message: dict) -> None:
     if not sio:
+        logger.warning("[SOCKET] emit_order_message called but sio is None")
         return
     d = _s(message)
+    order_id = message.get("order_id")
+    support_id = message.get("support_id")
+    bot_id = message.get("bot_id")
+    logger.info(
+        f"[SOCKET] emit order:message order_id={order_id} support_id={support_id} bot_id={bot_id}"
+    )
     await sio.emit("order:message", d, room="role:SUPERADMIN")
     await sio.emit("order:message", d, room="role:MANAGER")
-    if message.get("bot_id"):
-        await sio.emit("order:message", d, room=f"bot:{message['bot_id']}")
-    if message.get("support_id"):
-        await sio.emit("order:message", d, room=f"user:{message['support_id']}")
+    if bot_id:
+        await sio.emit("order:message", d, room=f"bot:{bot_id}")
+    if support_id:
+        await sio.emit("order:message", d, room=f"user:{support_id}")
+        logger.info(f"[SOCKET] emitted order:message to user:{support_id}")
+    else:
+        logger.warning(f"[SOCKET] order:message order_id={order_id} — support_id is None, operator won't receive it")
 
 
 async def emit_user_payment_confirmation(data: dict) -> None:

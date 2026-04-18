@@ -106,6 +106,7 @@ export const ordersApi = {
   setOrderRequisites: (id, data) => api.post(`/orders/${id}/requisites`, data),
   getAvailableOrders: () => api.get('/orders/available/support'),
   markMessagesRead: (id) => api.post(`/orders/${id}/messages/read`),
+  updateOrderAmount: (id, data) => api.patch(`/orders/${id}/amount`, data),
   getOperatorStats: () => api.get('/orders/stats/operator'),
   getOperatorChartData: (days = 7) => api.get(`/orders/stats/operator/chart?days=${days}`),
 };

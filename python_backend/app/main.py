@@ -4,8 +4,8 @@ import logging
 import socketio
 import sqlalchemy
 from fastapi import FastAPI
+from fastapi.middleware.cors import CORSMiddleware
 from jose import JWTError, jwt
-from starlette.middleware.cors import CORSMiddleware as StarletteCorsMW
 
 from app.config import settings
 from app.database import engine
@@ -17,25 +17,29 @@ from app.routers import (
 import app.socket.socket_service as socket_service
 from bot.manager import bot_manager
 
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
+)
 logger = logging.getLogger(__name__)
 
 sio = socketio.AsyncServer(
     async_mode="asgi",
-    cors_allowed_origins=[],  # CORS handled by outer Starlette middleware
+    cors_allowed_origins="*",
+    logger=True,
+    engineio_logger=True,
 )
 socket_service.init(sio)
 
 
 @sio.event
 async def connect(sid, environ, auth_data):
-    # auth_data is populated when client passes auth in socket.io options.
-    # This frontend uses a custom 'authenticate' event instead, handled below.
-    pass
+    logger.info(f"[SOCKET] connect sid={sid}")
 
 
 @sio.event
 async def disconnect(sid):
-    pass
+    logger.info(f"[SOCKET] disconnect sid={sid}")
 
 
 @sio.on("authenticate")
@@ -46,6 +50,7 @@ async def on_authenticate(sid, data):
     """
     token = (data or {}).get("token")
     if not token:
+        logger.warning(f"[SOCKET] authenticate sid={sid} — no token")
         await sio.emit("authenticated", {"success": False, "error": "No token"}, to=sid)
         return
 
@@ -57,7 +62,7 @@ async def on_authenticate(sid, data):
             options={"verify_exp": False},
         )
     except JWTError as e:
-        logger.warning(f"Socket auth failed: {e}")
+        logger.warning(f"[SOCKET] authenticate sid={sid} — JWT error: {e}")
         await sio.emit("authenticated", {"success": False, "error": "Invalid token"}, to=sid)
         return
 
@@ -65,15 +70,21 @@ async def on_authenticate(sid, data):
     user_id = payload.get("id")
     bot_id = payload.get("botId")
 
+    rooms = []
     if role:
         await sio.enter_room(sid, f"role:{role}")
+        rooms.append(f"role:{role}")
     if role == "OPERATOR":
         await sio.enter_room(sid, "operators")
+        rooms.append("operators")
     if user_id:
         await sio.enter_room(sid, f"user:{user_id}")
+        rooms.append(f"user:{user_id}")
     if bot_id:
         await sio.enter_room(sid, f"bot:{bot_id}")
+        rooms.append(f"bot:{bot_id}")
 
+    logger.info(f"[SOCKET] authenticated sid={sid} user_id={user_id} role={role} rooms={rooms}")
     await sio.emit("authenticated", {"success": True, "userId": user_id, "role": role}, to=sid)
 
 
@@ -93,6 +104,14 @@ fastapi_app = FastAPI(
     title="Kazah Exchange API",
     version="1.0.0",
     lifespan=lifespan,
+)
+
+fastapi_app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_credentials=False,
+    allow_methods=["*"],
+    allow_headers=["*"],
 )
 
 fastapi_app.include_router(auth.router)
@@ -116,16 +135,10 @@ async def health():
     return {"status": "ok"}
 
 
-_socket_app = socketio.ASGIApp(sio, other_asgi_app=fastapi_app)
-
-# Single outer CORS middleware covering ALL requests including socket.io polling
-app = StarletteCorsMW(
-    _socket_app,
-    allow_origins=["*"],
-    allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
-)
+# socketio.ASGIApp is the outermost ASGI app — recommended pattern for
+# python-socketio + FastAPI. socketio handles /socket.io/* paths itself
+# (cors_allowed_origins='*' set above), all other requests go to fastapi_app.
+app = socketio.ASGIApp(sio, other_asgi_app=fastapi_app)
 
 
 

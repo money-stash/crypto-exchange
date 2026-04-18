@@ -485,6 +485,108 @@ async def send_message(
 
 
 # ---------------------------------------------------------------------------
+# PATCH /:id/amount  — оператор/менеджер изменяет сумму сделки
+# ---------------------------------------------------------------------------
+
+@router.patch("/{order_id}/amount")
+async def update_order_amount(
+    order_id: int,
+    body: dict,
+    current_user: Support = Depends(require_auth),
+    db: AsyncSession = Depends(get_db),
+):
+    row = await db.execute(text("SELECT * FROM orders WHERE id = :id"), {"id": order_id})
+    order = row.mappings().one_or_none()
+    if not order:
+        raise HTTPException(404, "Order not found")
+    order = dict(order)
+
+    if order["status"] in ("COMPLETED", "CANCELLED"):
+        raise HTTPException(400, "Нельзя изменить сумму завершённой или отменённой заявки")
+
+    if current_user.role == "OPERATOR" and order.get("support_id") != current_user.id:
+        raise HTTPException(403, "Access denied")
+
+    rate_rub = float(order.get("rate_rub") or 0)
+    if rate_rub <= 0:
+        raise HTTPException(400, "Курс заявки недоступен для пересчёта")
+
+    old_sum_rub = float(order.get("sum_rub") or 0)
+    old_amount_coin = float(order.get("amount_coin") or 0)
+    coin = order.get("coin", "")
+
+    new_sum_rub: float | None = None
+    new_amount_coin: float | None = None
+
+    if "sum_rub" in body and body["sum_rub"] is not None:
+        new_sum_rub = float(body["sum_rub"])
+        if new_sum_rub <= 0:
+            raise HTTPException(400, "Сумма должна быть больше нуля")
+        new_amount_coin = round(new_sum_rub / rate_rub, 8)
+    elif "amount_coin" in body and body["amount_coin"] is not None:
+        new_amount_coin = float(body["amount_coin"])
+        if new_amount_coin <= 0:
+            raise HTTPException(400, "Количество монет должно быть больше нуля")
+        new_sum_rub = round(new_amount_coin * rate_rub, 2)
+    else:
+        raise HTTPException(400, "Необходимо передать sum_rub или amount_coin")
+
+    await db.execute(
+        text("UPDATE orders SET sum_rub = :sum_rub, amount_coin = :amount_coin, updated_at = NOW() WHERE id = :id"),
+        {"sum_rub": new_sum_rub, "amount_coin": new_amount_coin, "id": order_id},
+    )
+
+    # Уведомление в чат
+    notify_text = (
+        f"⚙️ Оператор изменил сумму сделки:\n"
+        f"{old_sum_rub:,.2f} RUB → {new_sum_rub:,.2f} RUB\n"
+        f"{old_amount_coin:.8f} {coin} → {new_amount_coin:.8f} {coin}"
+    )
+    msg_result = await db.execute(text("""
+        INSERT INTO deal_messages (order_id, sender_type, sender_id, message, is_read, created_at)
+        VALUES (:order_id, 'OPERATOR', :sender_id, :message, 0, NOW())
+    """), {"order_id": order_id, "sender_id": current_user.id, "message": notify_text})
+    msg_id = msg_result.lastrowid
+
+    await db.commit()
+
+    updated = await db.execute(text(f"{ORDER_SELECT} WHERE o.id = :id"), {"id": order_id})
+    updated_order = dict(updated.mappings().one())
+
+    msg_row = await db.execute(text("SELECT * FROM deal_messages WHERE id = :id"), {"id": msg_id})
+    msg = dict(msg_row.mappings().one())
+
+    await sio.emit_order_updated(updated_order)
+    try:
+        await sio.emit_order_message({**msg, "bot_id": order.get("bot_id"), "support_id": order.get("support_id")})
+    except Exception as e:
+        logger.warning(f"Failed to emit order:message for amount change on order {order_id}: {e}")
+
+    # Отправляем уведомление пользователю в Telegram
+    try:
+        from bot.manager import bot_manager
+        tg_row = await db.execute(
+            text("SELECT u.tg_id FROM orders o JOIN users u ON u.id = o.user_id WHERE o.id = :id"),
+            {"id": order_id},
+        )
+        tg_data = tg_row.fetchone()
+        bot_id = order.get("bot_id")
+        if tg_data and bot_id:
+            await bot_manager.send_message(
+                bot_id,
+                int(tg_data.tg_id),
+                f"⚙️ <b>Оператор изменил сумму вашей заявки #{order.get('unique_id')}:</b>\n"
+                f"{old_sum_rub:,.2f} RUB → {new_sum_rub:,.2f} RUB\n"
+                f"{old_amount_coin:.8f} {coin} → {new_amount_coin:.8f} {coin}",
+                parse_mode="HTML",
+            )
+    except Exception as e:
+        logger.warning(f"Failed to notify user about amount change for order {order_id}: {e}")
+
+    return {"success": True, "order": updated_order, "message": msg}
+
+
+# ---------------------------------------------------------------------------
 # POST /:id/messages/read
 # ---------------------------------------------------------------------------
 
