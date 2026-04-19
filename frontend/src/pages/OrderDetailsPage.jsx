@@ -9,6 +9,7 @@ import OrderChat from '../components/OrderChat';
 import OperatorManagerChat from '../components/OperatorManagerChat';
 import OrderProgressBar from '../components/OrderProgressBar';
 import CancelOrderModal from '../components/CancelOrderModal';
+import ConfirmPaymentModal from '../components/ConfirmPaymentModal';
 import { useAuth } from '../hooks/useAuth';
 import AnimatedTimer from '../components/AnimatedTimer';
 import socketService from '../services/socketService';
@@ -132,6 +133,7 @@ const OrderDetailsPage = () => {
   const [receiptFile, setReceiptFile] = useState(null);
   const [showCompletionModal, setShowCompletionModal] = useState(false);
   const [showCancelModal, setShowCancelModal] = useState(false);
+  const [showConfirmPaymentModal, setShowConfirmPaymentModal] = useState(false);
   const [showRequisitesModal, setShowRequisitesModal] = useState(false);
   const [activeChatTab, setActiveChatTab] = useState('client');
   const [showRequisitesEditForm, setShowRequisitesEditForm] = useState(false);
@@ -499,23 +501,19 @@ const OrderDetailsPage = () => {
     }
   };
 
-  const handleConfirmPayment = async () => {
-    const confirmed = await confirm({
-      title: 'Подтверждение оплаты',
-      message: 'Вы уверены, что хотите подтвердить оплату?',
-      confirmText: 'Подтвердить',
-      cancelText: 'Отмена',
-      type: 'success'
-    });
+  const handleConfirmPayment = () => {
+    setShowConfirmPaymentModal(true);
+  };
 
-    if (!confirmed) return;
-
+  const handleConfirmPaymentSubmit = async (receivedUsdt) => {
+    setShowConfirmPaymentModal(false);
     try {
-      const response = await dealsApi.confirmPayment(id);
+      const payload = receivedUsdt ? { received_usdt: receivedUsdt } : {};
+      const response = await dealsApi.confirmPayment(id, payload);
       toast.success('Оплата подтверждена');
       setOrder(response.data.orderDetails);
     } catch (error) {
-      const errorMessage = error.response?.data?.message || error.message || 'Неизвестная ошибка';
+      const errorMessage = error.response?.data?.detail || error.response?.data?.message || error.message || 'Неизвестная ошибка';
       toast.error(`Ошибка при подтверждении оплаты: ${errorMessage}`);
       console.error('Confirm payment error:', error);
     }
@@ -1709,6 +1707,14 @@ const managementUsdtRate = (() => {
         isOpen={showCancelModal}
         onClose={() => setShowCancelModal(false)}
         onConfirm={handleCancelConfirm}
+      />
+
+      <ConfirmPaymentModal
+        isOpen={showConfirmPaymentModal}
+        onClose={() => setShowConfirmPaymentModal(false)}
+        onConfirm={handleConfirmPaymentSubmit}
+        order={order}
+        operatorType={user?.operator_type || 'manual'}
       />
     </PageTransition>
   );

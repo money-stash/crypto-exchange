@@ -19,9 +19,10 @@ import {
   MoonIcon,
   EnvelopeIcon
 } from '@heroicons/react/24/outline';
-import { ChevronRight, Trophy, Download, MessageCircle, ScrollText } from 'lucide-react';
+import { ChevronRight, Trophy, Download, MessageCircle, ScrollText, BarChart3 } from 'lucide-react';
 import { operatorManagerChatsApi } from '../services/api';
 import socketService from '../services/socketService';
+import ShiftButton from './ShiftButton';
 const Layout = () => {
   const { user, logout, isAdmin, isManager, isExAdmin } = useAuth();
   useOperatorUiAutoTranslation(user);
@@ -94,6 +95,9 @@ const Layout = () => {
       { name: 'Сотрудники', href: '/supports', icon: UserGroupIcon },
       { name: 'Логи', href: '/logs', icon: ScrollText },
     ] : []),
+    ...(user?.role === 'SUPERADMIN'
+      ? [{ name: 'Финансы', href: '/finance', icon: BarChart3 }]
+      : []),
   ];
 
   const handleLogout = () => {
@@ -192,6 +196,13 @@ const Layout = () => {
             );
           })}
         </nav>
+
+        {/* Shift button for operators */}
+        {user?.role === 'OPERATOR' && (
+          <div className="px-2.5 pb-2">
+            <ShiftButton />
+          </div>
+        )}
 
         {/* User info */}
         <div className="border-t border-gray-200/70 dark:border-gray-700/70 p-2.5">

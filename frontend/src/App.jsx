@@ -27,6 +27,7 @@ import OperatorsRatingPage from './pages/OperatorsRatingPage';
 import ReferralWithdrawalsPage from './pages/ReferralWithdrawalsPage';
 import OperatorManagerChatsPage from './pages/OperatorManagerChatsPage';
 import AuditLogsPage from './pages/AuditLogsPage';
+import FinancePage from './pages/FinancePage';
 
 const ProtectedRoute = ({ children, requiredRole = null }) => {
   const { isAuthenticated, user, loading } = useAuth();
@@ -155,6 +156,11 @@ const AppRoutes = () => {
             <Route path="referral-withdrawals" element={
               <ProtectedRoute requiredRole={['EX_ADMIN', 'SUPERADMIN']}>
                 <ReferralWithdrawalsPage />
+              </ProtectedRoute>
+            } />
+            <Route path="finance" element={
+              <ProtectedRoute requiredRole="SUPERADMIN">
+                <FinancePage />
               </ProtectedRoute>
             } />
           </Route>

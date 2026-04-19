@@ -89,18 +89,149 @@ async def get_manager_stats(
     current_user: Support = Depends(require_roles("SUPERADMIN", "MANAGER")),
     db: AsyncSession = Depends(get_db),
 ):
-    row = await db.execute(text("""
+    # Bots count
+    bots_row = await db.execute(text("""
         SELECT
-            COUNT(DISTINCT b.id) AS total_bots,
-            COUNT(DISTINCT CASE WHEN b.is_active = 1 THEN b.id END) AS active_bots,
-            COUNT(DISTINCT o.id) AS total_orders,
-            COUNT(DISTINCT CASE WHEN o.status = 'COMPLETED' THEN o.id END) AS completed_orders,
-            COUNT(DISTINCT CASE WHEN o.status IN ('QUEUED','PAYMENT_PENDING','AWAITING_CONFIRM','AWAITING_HASH') THEN o.id END) AS active_orders,
-            COALESCE(SUM(CASE WHEN o.status = 'COMPLETED' THEN o.sum_rub END), 0) AS total_volume_rub
+            COUNT(*) AS total,
+            COUNT(CASE WHEN is_active = 1 THEN 1 END) AS active
+        FROM bots
+    """))
+    bots = dict(bots_row.mappings().one())
+
+    # Overall orders
+    overall_row = await db.execute(text("""
+        SELECT
+            COUNT(*) AS total_orders,
+            COUNT(CASE WHEN status = 'COMPLETED' THEN 1 END) AS completed_orders,
+            COALESCE(SUM(CASE WHEN status = 'COMPLETED' THEN sum_rub END), 0) AS total_volume
+        FROM orders
+    """))
+    overall = dict(overall_row.mappings().one())
+
+    # Today
+    today_row = await db.execute(text("""
+        SELECT
+            COUNT(CASE WHEN status = 'COMPLETED' THEN 1 END) AS completed,
+            COALESCE(SUM(CASE WHEN status = 'COMPLETED' THEN sum_rub END), 0) AS volume
+        FROM orders WHERE DATE(created_at) = CURDATE()
+    """))
+    today = dict(today_row.mappings().one())
+
+    # Monthly
+    monthly_row = await db.execute(text("""
+        SELECT
+            COUNT(CASE WHEN status = 'COMPLETED' THEN 1 END) AS completed,
+            COALESCE(SUM(CASE WHEN status = 'COMPLETED' THEN sum_rub END), 0) AS volume
+        FROM orders
+        WHERE YEAR(created_at) = YEAR(NOW()) AND MONTH(created_at) = MONTH(NOW())
+    """))
+    monthly = dict(monthly_row.mappings().one())
+
+    # Top bots by completed orders
+    top_bots_rows = await db.execute(text("""
+        SELECT
+            b.name, b.identifier,
+            COUNT(o.id) AS total_orders,
+            COUNT(CASE WHEN o.status = 'COMPLETED' THEN 1 END) AS completed_orders,
+            COALESCE(SUM(CASE WHEN o.status = 'COMPLETED' THEN o.sum_rub END), 0) AS total_volume,
+            COALESCE(AVG(CASE WHEN o.status = 'COMPLETED' THEN o.sum_rub END), 0) AS avg_order_value
         FROM bots b
         LEFT JOIN orders o ON o.bot_id = b.id
+        GROUP BY b.id, b.name, b.identifier
+        ORDER BY completed_orders DESC
+        LIMIT 10
     """))
-    return dict(row.mappings().one())
+    top_bots = [dict(r._mapping) for r in top_bots_rows]
+    for bot in top_bots:
+        tot = int(bot["total_orders"] or 0)
+        comp = int(bot["completed_orders"] or 0)
+        bot["total_orders"] = tot
+        bot["completed_orders"] = comp
+        bot["total_volume"] = float(bot["total_volume"] or 0)
+        bot["avg_order_value"] = float(bot["avg_order_value"] or 0)
+        bot["completion_rate"] = round(comp / tot * 100, 1) if tot > 0 else 0
+
+    # Top currencies
+    currencies_rows = await db.execute(text("""
+        SELECT
+            coin,
+            COUNT(*) AS total_orders,
+            COUNT(CASE WHEN status = 'COMPLETED' THEN 1 END) AS completed_orders,
+            COALESCE(SUM(CASE WHEN status = 'COMPLETED' THEN sum_rub END), 0) AS total_volume
+        FROM orders
+        GROUP BY coin
+        ORDER BY completed_orders DESC
+        LIMIT 10
+    """))
+    top_currencies = []
+    for r in currencies_rows:
+        d = dict(r._mapping)
+        tot = int(d["total_orders"] or 0)
+        comp = int(d["completed_orders"] or 0)
+        d["total_orders"] = tot
+        d["completed_orders"] = comp
+        d["total_volume"] = float(d["total_volume"] or 0)
+        d["completion_rate"] = round(comp / tot * 100, 1) if tot > 0 else 0
+        top_currencies.append(d)
+
+    # Daily performance — last 30 days (for DailyPerformanceChart)
+    daily_rows = await db.execute(text("""
+        SELECT
+            DATE(created_at) AS date,
+            COUNT(*) AS total_orders,
+            COUNT(CASE WHEN status = 'COMPLETED' THEN 1 END) AS completed_orders,
+            COALESCE(SUM(CASE WHEN status = 'COMPLETED' THEN sum_rub END), 0) AS total_volume
+        FROM orders
+        WHERE created_at >= DATE_SUB(NOW(), INTERVAL 30 DAY)
+        GROUP BY DATE(created_at)
+        ORDER BY date ASC
+    """))
+    daily_performance = [dict(r._mapping) for r in daily_rows]
+    for d in daily_performance:
+        d["total_volume"] = float(d["total_volume"] or 0)
+
+    # Bot performance (for BotPerformanceChart)
+    bot_perf_rows = await db.execute(text("""
+        SELECT
+            b.name, b.identifier,
+            COUNT(CASE WHEN o.status = 'COMPLETED' THEN 1 END) AS completed_orders,
+            COALESCE(SUM(CASE WHEN o.status = 'COMPLETED' THEN o.sum_rub END), 0) AS total_volume
+        FROM bots b
+        LEFT JOIN orders o ON o.bot_id = b.id
+        GROUP BY b.id, b.name, b.identifier
+        ORDER BY completed_orders DESC
+        LIMIT 8
+    """))
+    bot_performance = []
+    for r in bot_perf_rows:
+        d = dict(r._mapping)
+        d["completed_orders"] = int(d["completed_orders"] or 0)
+        d["total_volume"] = float(d["total_volume"] or 0)
+        bot_performance.append(d)
+
+    return {
+        "bots": {
+            "total": int(bots["total"] or 0),
+            "active": int(bots["active"] or 0),
+        },
+        "overall": {
+            "total_orders": int(overall["total_orders"] or 0),
+            "completed_orders": int(overall["completed_orders"] or 0),
+            "total_volume": float(overall["total_volume"] or 0),
+        },
+        "today": {
+            "completed": int(today["completed"] or 0),
+            "volume": float(today["volume"] or 0),
+        },
+        "monthly": {
+            "completed": int(monthly["completed"] or 0),
+            "volume": float(monthly["volume"] or 0),
+        },
+        "topBots": top_bots,
+        "topCurrencies": top_currencies,
+        "dailyPerformance": daily_performance,
+        "botPerformance": bot_performance,
+    }
 
 
 @router.get("/simple")
@@ -338,6 +469,9 @@ async def create_bot_requisite(
     current_user: Support = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
+    import logging as _logging
+    _log = _logging.getLogger(__name__)
+
     await _check_bot_access(bot_id, current_user, db, write=True)
     req = BotRequisite(
         bot_id=bot_id, type=body.type, address=body.address,
@@ -347,6 +481,125 @@ async def create_bot_requisite(
     )
     db.add(req)
     await db.flush()
+
+    # If order_id provided — update order's exchanger requisite fields
+    order_info = None
+    if body.order_id:
+        is_crypto = body.type not in ("CARD", "SBP")
+        if is_crypto:
+            await db.execute(
+                text("""
+                    UPDATE orders SET
+                        exch_req_id = :req_id,
+                        exch_crypto_address = :address,
+                        exch_card_number = NULL,
+                        exch_sbp_phone = NULL,
+                        exch_card_holder = NULL,
+                        exch_bank_name = NULL,
+                        updated_at = NOW()
+                    WHERE id = :order_id
+                """),
+                {
+                    "req_id": req.id,
+                    "address": body.address,
+                    "order_id": body.order_id,
+                },
+            )
+        else:
+            card_num = body.address if body.type == "CARD" else None
+            sbp_phone = body.address if body.type == "SBP" else None
+            await db.execute(
+                text("""
+                    UPDATE orders SET
+                        exch_req_id = :req_id,
+                        exch_card_number = :card_number,
+                        exch_sbp_phone = :sbp_phone,
+                        exch_card_holder = :holder,
+                        exch_bank_name = :bank,
+                        exch_crypto_address = NULL,
+                        updated_at = NOW()
+                    WHERE id = :order_id
+                """),
+                {
+                    "req_id": req.id,
+                    "card_number": card_num,
+                    "sbp_phone": sbp_phone,
+                    "holder": body.holder_name or "",
+                    "bank": body.bank_name or "",
+                    "order_id": body.order_id,
+                },
+            )
+
+        # Fetch order to send Telegram notification
+        order_row = await db.execute(
+            text("""
+                SELECT o.id, o.unique_id, o.dir, o.coin, o.bot_id, o.status,
+                       u.tg_id
+                FROM orders o
+                JOIN users u ON u.id = o.user_id
+                WHERE o.id = :order_id
+            """),
+            {"order_id": body.order_id},
+        )
+        order_info = order_row.fetchone()
+
+    await db.commit()
+
+    # Send Telegram message to client after commit
+    if order_info and order_info.tg_id:
+        try:
+            from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton
+            is_crypto = body.type not in ("CARD", "SBP")
+            if is_crypto:
+                # SELL order: client must send crypto to this address
+                text_msg = (
+                    f"📋 <b>Реквизиты для перевода</b>\n\n"
+                    f"Заявка #{order_info.unique_id}\n"
+                    f"Отправьте <b>{order_info.coin}</b> на адрес:\n\n"
+                    f"<code>{body.address}</code>"
+                )
+                if body.label:
+                    text_msg += f"\n\nКомментарий: {body.label}"
+                markup = InlineKeyboardMarkup(inline_keyboard=[[
+                    InlineKeyboardButton(
+                        text="✅ Я отправил крипту",
+                        callback_data=f"user_sent_crypto:{order_info.id}",
+                    )
+                ]])
+                await bot_manager.send_message(
+                    order_info.bot_id,
+                    order_info.tg_id,
+                    text_msg,
+                    parse_mode="HTML",
+                    reply_markup=markup,
+                )
+            else:
+                # BUY order: client must pay RUB to this card/SBP
+                if body.type == "SBP":
+                    details = f"Номер СБП: <code>{body.address}</code>"
+                else:
+                    details = f"Номер карты: <code>{body.address}</code>"
+                if body.bank_name:
+                    details += f"\nБанк: {body.bank_name}"
+                if body.holder_name:
+                    details += f"\nПолучатель: {body.holder_name}"
+                if body.label:
+                    details += f"\nКомментарий: {body.label}"
+                text_msg = (
+                    f"📋 <b>Реквизиты для оплаты</b>\n\n"
+                    f"Заявка #{order_info.unique_id}\n"
+                    f"Переведите рубли по реквизитам:\n\n"
+                    f"{details}"
+                )
+                await bot_manager.send_message(
+                    order_info.bot_id,
+                    order_info.tg_id,
+                    text_msg,
+                    parse_mode="HTML",
+                )
+        except Exception as e:
+            _log.warning(f"[BOTS] Failed to send requisites notification for order {body.order_id}: {e}")
+
     return {"id": req.id, "bot_id": req.bot_id, "type": req.type, "address": req.address}
 
 

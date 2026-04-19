@@ -115,7 +115,7 @@ export const ordersApi = {
 export const dealsApi = {
   assignDeal: (id, data) => api.post(`/deals/${id}/assign`, data),
   markPayment: (id) => api.post(`/deals/${id}/mark-payment`),
-  confirmPayment: (id) => api.post(`/deals/${id}/confirm-payment`),
+  confirmPayment: (id, data) => api.post(`/deals/${id}/confirm-payment`, data || {}),
   setTransactionHash: (id, data) => api.post(`/deals/${id}/transaction-hash`, data),
   completeDeal: (id, data) => {
     // Если data это FormData, отправляем как multipart/form-data
@@ -252,6 +252,24 @@ export const operatorManagerChatsApi = {
     return api.post(`/operator-manager-chats/operators/${operatorId}/messages`, data);
   },
   markAsRead: (operatorId) => api.post(`/operator-manager-chats/operators/${operatorId}/read`),
+};
+
+export const shiftsApi = {
+  startShift: (data) => api.post('/shifts/start', data || {}),
+  endShift: (data) => api.post('/shifts/end', data || {}),
+  getCurrentShift: () => api.get('/shifts/current'),
+  getShifts: (params) => api.get('/shifts', { params }),
+  updatePenalty: (shiftId, penalty) => api.patch(`/shifts/${shiftId}/penalty`, { penalty }),
+};
+
+export const financeApi = {
+  getStats: (params) => api.get('/finance/stats', { params }),
+  getOperatorStats: (supportId, params) => api.get(`/finance/operator/${supportId}`, { params }),
+  getMonthlySummaries: (months) => api.get('/finance/monthly-summary', { params: { months } }),
+  export: (params) => api.get('/finance/export', {
+    params,
+    responseType: 'blob',
+  }),
 };
 
 export const auditLogsApi = {

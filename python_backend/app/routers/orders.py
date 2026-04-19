@@ -109,19 +109,58 @@ async def get_operator_stats(
         raise HTTPException(403, "Access denied")
 
     uid = current_user.id
-    row = await db.execute(text("""
+
+    all_row = await db.execute(text("""
         SELECT
-            COUNT(*) AS total,
-            COUNT(CASE WHEN status = 'COMPLETED' THEN 1 END) AS completed,
-            COUNT(CASE WHEN status = 'CANCELLED' THEN 1 END) AS cancelled,
-            COUNT(CASE WHEN status IN ('QUEUED','PAYMENT_PENDING','AWAITING_CONFIRM','AWAITING_HASH') THEN 1 END) AS active
+            COUNT(CASE WHEN status IN ('QUEUED','PAYMENT_PENDING','AWAITING_CONFIRM','AWAITING_HASH') THEN 1 END) AS assigned,
+            COUNT(CASE WHEN status = 'COMPLETED' THEN 1 END) AS total_completed,
+            COALESCE(SUM(CASE WHEN status = 'COMPLETED' THEN sum_rub END), 0) AS total_volume
         FROM orders WHERE support_id = :uid
     """), {"uid": uid})
-    stats = dict(row.mappings().one())
+    all_stats = dict(all_row.mappings().one())
 
-    support = await db.execute(text("SELECT rating, deposit, deposit_paid, deposit_work FROM supports WHERE id = :uid"), {"uid": uid})
-    sup = dict(support.mappings().one())
-    return {**stats, **sup}
+    today_row = await db.execute(text("""
+        SELECT
+            COUNT(CASE WHEN status = 'COMPLETED' THEN 1 END) AS completed,
+            COALESCE(SUM(CASE WHEN status = 'COMPLETED' THEN sum_rub END), 0) AS volume
+        FROM orders
+        WHERE support_id = :uid AND DATE(created_at) = CURDATE()
+    """), {"uid": uid})
+    today = dict(today_row.mappings().one())
+
+    monthly_row = await db.execute(text("""
+        SELECT
+            COUNT(CASE WHEN status = 'COMPLETED' THEN 1 END) AS completed,
+            COALESCE(SUM(CASE WHEN status = 'COMPLETED' THEN sum_rub END), 0) AS volume
+        FROM orders
+        WHERE support_id = :uid
+          AND YEAR(created_at) = YEAR(NOW())
+          AND MONTH(created_at) = MONTH(NOW())
+    """), {"uid": uid})
+    monthly = dict(monthly_row.mappings().one())
+
+    sup_row = await db.execute(
+        text("SELECT rating, deposit, deposit_paid, deposit_work FROM supports WHERE id = :uid"),
+        {"uid": uid},
+    )
+    sup = dict(sup_row.mappings().one())
+
+    return {
+        "assigned": int(all_stats["assigned"] or 0),
+        "today": {
+            "completed": int(today["completed"] or 0),
+            "volume": float(today["volume"] or 0),
+        },
+        "monthly": {
+            "completed": int(monthly["completed"] or 0),
+            "volume": float(monthly["volume"] or 0),
+        },
+        "total": {
+            "completed": int(all_stats["total_completed"] or 0),
+            "volume": float(all_stats["total_volume"] or 0),
+        },
+        **sup,
+    }
 
 
 # ---------------------------------------------------------------------------
@@ -377,6 +416,69 @@ async def set_order_requisites(
     updated = await db.execute(text(f"{ORDER_SELECT} WHERE o.id = :id"), {"id": order_id})
     updated_order = dict(updated.mappings().one())
     await sio.emit_order_updated(updated_order)
+
+    # Уведомить клиента в Telegram об адресе/реквизитах
+    try:
+        from bot.manager import bot_manager
+        from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton
+
+        tg_row = await db.execute(
+            text("SELECT u.tg_id FROM orders o JOIN users u ON u.id = o.user_id WHERE o.id = :id"),
+            {"id": order_id},
+        )
+        tg_data = tg_row.fetchone()
+        bot_id = updated_order.get("bot_id")
+        unique_id = updated_order.get("unique_id")
+        coin = updated_order.get("coin", "")
+        direction = updated_order.get("dir", "")
+        amount_coin = updated_order.get("amount_coin", "")
+
+        if tg_data and bot_id:
+            crypto_address = body.get("crypto_address") if isinstance(body, dict) else None
+            card_number = body.get("card_number") if isinstance(body, dict) else None
+
+            if direction == "SELL" and crypto_address:
+                # Клиент должен отправить крипту на этот адрес
+                msg_text = (
+                    f"📬 <b>Оператор выставил реквизиты для заявки #{unique_id}</b>\n\n"
+                    f"Отправьте <b>{amount_coin} {coin}</b> на адрес:\n\n"
+                    f"<code>{crypto_address}</code>\n\n"
+                    f"⚠️ После отправки нажмите кнопку ниже."
+                )
+                keyboard = InlineKeyboardMarkup(inline_keyboard=[
+                    [InlineKeyboardButton(
+                        text="✅ Я отправил крипту",
+                        callback_data=f"user_sent_crypto:{order_id}"
+                    )]
+                ])
+                await bot_manager.send_message(
+                    bot_id, int(tg_data.tg_id), msg_text,
+                    parse_mode="HTML", reply_markup=keyboard
+                )
+            elif direction == "BUY" and card_number:
+                # Клиент должен оплатить рублями на карту
+                card_holder = body.get("card_holder", "") if isinstance(body, dict) else ""
+                bank_name = body.get("bank_name", "") if isinstance(body, dict) else ""
+                msg_text = (
+                    f"💳 <b>Оператор выставил реквизиты для заявки #{unique_id}</b>\n\n"
+                    f"Переведите <b>{updated_order.get('sum_rub', '')} ₽</b>\n"
+                    f"На карту: <code>{card_number}</code>\n"
+                    + (f"Банк: {bank_name}\n" if bank_name else "")
+                    + (f"Получатель: {card_holder}\n" if card_holder else "")
+                    + f"\n⚠️ После оплаты нажмите кнопку ниже."
+                )
+                keyboard = InlineKeyboardMarkup(inline_keyboard=[
+                    [InlineKeyboardButton(
+                        text="✅ Я оплатил",
+                        callback_data=f"user_sent_crypto:{order_id}"
+                    )]
+                ])
+                await bot_manager.send_message(
+                    bot_id, int(tg_data.tg_id), msg_text,
+                    parse_mode="HTML", reply_markup=keyboard
+                )
+    except Exception as e:
+        logger.warning(f"Failed to notify user about requisites for order {order_id}: {e}")
 
     return {"success": True, "message": "Requisites updated successfully"}
 

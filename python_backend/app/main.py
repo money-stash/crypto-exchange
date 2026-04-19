@@ -5,6 +5,7 @@ import socketio
 import sqlalchemy
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.staticfiles import StaticFiles
 from jose import JWTError, jwt
 
 from app.config import settings
@@ -13,6 +14,7 @@ from app.routers import (
     auth, supports, orders, bots, rates, support_chats,
     users, operator_manager_chats, referral_withdrawals,
     audit_logs, settings as settings_router, fees, mailings, uploads,
+    deals, shifts, finance,
 )
 import app.socket.socket_service as socket_service
 from bot.manager import bot_manager
@@ -128,6 +130,14 @@ fastapi_app.include_router(settings_router.router)
 fastapi_app.include_router(fees.router)
 fastapi_app.include_router(mailings.router)
 fastapi_app.include_router(uploads.router)
+fastapi_app.include_router(deals.router)
+fastapi_app.include_router(shifts.router)
+fastapi_app.include_router(finance.router)
+
+import os as _os
+_os.makedirs("uploads/chats", exist_ok=True)
+_os.makedirs("uploads/mailings", exist_ok=True)
+fastapi_app.mount("/uploads", StaticFiles(directory="uploads"), name="uploads")
 
 
 @fastapi_app.get("/health")
