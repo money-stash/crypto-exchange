@@ -134,6 +134,7 @@ const OrderDetailsPage = () => {
   const [showCompletionModal, setShowCompletionModal] = useState(false);
   const [showCancelModal, setShowCancelModal] = useState(false);
   const [showConfirmPaymentModal, setShowConfirmPaymentModal] = useState(false);
+  const [currentUsdtRate, setCurrentUsdtRate] = useState(null);
   const [showRequisitesModal, setShowRequisitesModal] = useState(false);
   const [activeChatTab, setActiveChatTab] = useState('client');
   const [showRequisitesEditForm, setShowRequisitesEditForm] = useState(false);
@@ -166,7 +167,7 @@ const OrderDetailsPage = () => {
   const hasOperatorCancelPermission = Number(user?.can_cancel_order ?? 0) === 1;
   const hasOperatorEditRequisitesPermission = Number(user?.can_edit_requisites ?? 0) === 1;
   const isOperatorBuyHidden = isOperatorRole && order?.dir === 'BUY' && order?.redacted_for_operator;
-  const canCompleteBuyOrder = ['MANAGER', 'SUPERADMIN'].includes(roleUpper);
+  const canCompleteBuyOrder = ['MANAGER', 'SUPERADMIN', 'CASHIER'].includes(roleUpper);
   const hasExchangerRequisites = Boolean(
     order?.exch_req_id ||
     order?.exch_card_number ||
@@ -501,14 +502,22 @@ const OrderDetailsPage = () => {
     }
   };
 
-  const handleConfirmPayment = () => {
+  const handleConfirmPayment = async () => {
+    try {
+      const rateRes = await dealsApi.getUsdtRate(id);
+      setCurrentUsdtRate(rateRes.data?.usdt_rate_rub || null);
+    } catch {
+      setCurrentUsdtRate(null);
+    }
     setShowConfirmPaymentModal(true);
   };
 
-  const handleConfirmPaymentSubmit = async (receivedUsdt) => {
+  const handleConfirmPaymentSubmit = async ({ receivedUsdt, usdtRateRub }) => {
     setShowConfirmPaymentModal(false);
     try {
-      const payload = receivedUsdt ? { received_usdt: receivedUsdt } : {};
+      const payload = {};
+      if (receivedUsdt) payload.received_usdt = receivedUsdt;
+      if (usdtRateRub) payload.usdt_rate_rub = usdtRateRub;
       const response = await dealsApi.confirmPayment(id, payload);
       toast.success('Оплата подтверждена');
       setOrder(response.data.orderDetails);
@@ -856,22 +865,49 @@ const managementUsdtRate = (() => {
 
                 {order.status !== 'COMPLETED' && order.status !== 'CANCELLED' && (
                   <>
-                    {(order.status === 'AWAITING_CONFIRM' || (order.dir === 'BUY' && order.status === 'PAYMENT_PENDING')) ? (
-                      <button
-                        onClick={handleConfirmPayment}
-                        className="inline-flex items-center gap-2 px-5 py-2.5 bg-gradient-to-r from-blue-500 to-blue-600 hover:from-blue-600 hover:to-blue-700 text-white font-semibold rounded-xl transition-all duration-300 shadow-md shadow-blue-500/30 hover:shadow-lg hover:shadow-blue-500/40 hover:scale-105 active:scale-95"
-                      >
-                        <Check className="w-4 h-4" />
-                        <span className="hidden sm:inline">Подтвердить оплату</span>
-                      </button>
+                    {roleUpper === 'CASHIER' ? (
+                      <>
+                        {order.status === 'AWAITING_CONFIRM' && (
+                          <button
+                            onClick={handleConfirmPayment}
+                            className="inline-flex items-center gap-2 px-5 py-2.5 bg-gradient-to-r from-blue-500 to-blue-600 hover:from-blue-600 hover:to-blue-700 text-white font-semibold rounded-xl transition-all duration-300 shadow-md shadow-blue-500/30 hover:shadow-lg hover:shadow-blue-500/40 hover:scale-105 active:scale-95"
+                          >
+                            <Check className="w-4 h-4" />
+                            <span className="hidden sm:inline">Подтвердить оплату</span>
+                          </button>
+                        )}
+                        {order.status === 'AWAITING_HASH' && (
+                          <button
+                            onClick={handleCompleteOrder}
+                            className="inline-flex items-center gap-2 px-5 py-2.5 bg-gradient-to-r from-green-500 to-emerald-600 hover:from-green-600 hover:to-emerald-700 text-white font-semibold rounded-xl transition-all duration-300 shadow-md shadow-green-500/30 hover:shadow-lg hover:shadow-green-500/40 hover:scale-105 active:scale-95"
+                          >
+                            <Check className="w-4 h-4" />
+                            <span className="hidden sm:inline">Завершить</span>
+                          </button>
+                        )}
+                      </>
                     ) : (
-                      !((order.dir === 'BUY') && !canCompleteBuyOrder) && (<button
-                        onClick={handleCompleteOrder}
-                        className="inline-flex items-center gap-2 px-5 py-2.5 bg-gradient-to-r from-green-500 to-emerald-600 hover:from-green-600 hover:to-emerald-700 text-white font-semibold rounded-xl transition-all duration-300 shadow-md shadow-green-500/30 hover:shadow-lg hover:shadow-green-500/40 hover:scale-105 active:scale-95"
-                      >
-                        <Check className="w-4 h-4" />
-                        <span className="hidden sm:inline">Завершить</span>
-                      </button>)
+                      <>
+                        {(order.status === 'AWAITING_CONFIRM' || (order.dir === 'BUY' && order.status === 'PAYMENT_PENDING')) ? (
+                          <button
+                            onClick={handleConfirmPayment}
+                            className="inline-flex items-center gap-2 px-5 py-2.5 bg-gradient-to-r from-blue-500 to-blue-600 hover:from-blue-600 hover:to-blue-700 text-white font-semibold rounded-xl transition-all duration-300 shadow-md shadow-blue-500/30 hover:shadow-lg hover:shadow-blue-500/40 hover:scale-105 active:scale-95"
+                          >
+                            <Check className="w-4 h-4" />
+                            <span className="hidden sm:inline">Подтвердить оплату</span>
+                          </button>
+                        ) : (
+                          !((order.dir === 'BUY') && !canCompleteBuyOrder) && (
+                            <button
+                              onClick={handleCompleteOrder}
+                              className="inline-flex items-center gap-2 px-5 py-2.5 bg-gradient-to-r from-green-500 to-emerald-600 hover:from-green-600 hover:to-emerald-700 text-white font-semibold rounded-xl transition-all duration-300 shadow-md shadow-green-500/30 hover:shadow-lg hover:shadow-green-500/40 hover:scale-105 active:scale-95"
+                            >
+                              <Check className="w-4 h-4" />
+                              <span className="hidden sm:inline">Завершить</span>
+                            </button>
+                          )
+                        )}
+                      </>
                     )}
                     {canOperatorCancelCurrentOrder && (
                       <button
@@ -1714,6 +1750,7 @@ const managementUsdtRate = (() => {
         onClose={() => setShowConfirmPaymentModal(false)}
         onConfirm={handleConfirmPaymentSubmit}
         order={order}
+        currentUsdtRate={currentUsdtRate}
         operatorType={user?.operator_type || 'manual'}
       />
     </PageTransition>

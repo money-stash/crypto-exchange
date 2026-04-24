@@ -61,7 +61,7 @@ def require_roles(*roles: str):
 
 require_admin = require_roles("SUPERADMIN")
 require_manager = require_roles("MANAGER", "EX_ADMIN", "SUPERADMIN")
-require_auth = require_roles("OPERATOR", "MANAGER", "EX_ADMIN", "SUPERADMIN")
+require_auth = require_roles("OPERATOR", "CASHIER", "MANAGER", "EX_ADMIN", "SUPERADMIN")
 
 
 

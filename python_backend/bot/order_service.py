@@ -205,6 +205,37 @@ async def create_order(
         )
         order = dict(row.mappings().one())
 
+    # Try auto-assign a cashier card (non-blocking fallback to operator queue)
+    auto_assigned = False
+    try:
+        from app.services.cashier_service import try_auto_assign_cashier_card
+        auto_assigned = await try_auto_assign_cashier_card(
+            order["id"], float(order["sum_rub"]), bot_id
+        )
+    except Exception as e:
+        logger.warning(f"Auto-assign cashier card failed for order {unique_id}: {e}")
+
+    # Re-fetch order if status changed (auto-assign moves it to PAYMENT_PENDING)
+    if auto_assigned:
+        try:
+            async with AsyncSessionLocal() as db:
+                row = await db.execute(
+                    text("""
+                        SELECT o.*, u.tg_id, u.username AS user_username,
+                               b.name AS bot_name
+                        FROM orders o
+                        LEFT JOIN users u ON u.id = o.user_id
+                        LEFT JOIN bots b ON b.id = o.bot_id
+                        WHERE o.id = :id LIMIT 1
+                    """),
+                    {"id": order["id"]},
+                )
+                updated = row.mappings().one_or_none()
+                if updated:
+                    order = dict(updated)
+        except Exception as e:
+            logger.warning(f"Failed to re-fetch order {unique_id} after auto-assign: {e}")
+
     # Emit socket event (non-blocking)
     try:
         await sio.emit_order_created(order)

@@ -4,24 +4,42 @@ import { CheckCircle, X } from 'lucide-react';
 
 /**
  * Модал подтверждения оплаты.
- * Оператор вводит сколько USDT получил — система считает курс и прибыль.
+ * Оператор всегда меняет USDT — вводит курс RUB/USDT и/или сумму USDT.
  *
  * Props:
- *   isOpen      — показать/скрыть
- *   onClose     — закрыть без сохранения
- *   onConfirm   — (receivedUsdt: number | null) => void
- *   order       — объект заявки (dir, amount_coin, sum_rub, rate_rub, coin)
- *   operatorType — 'manual' | 'card' | 'auto'  (для manual показываем поле)
+ *   isOpen           — показать/скрыть
+ *   onClose          — закрыть без сохранения
+ *   onConfirm        — ({ receivedUsdt, usdtRateRub }) => void
+ *   order            — объект заявки (dir, amount_coin, sum_rub, coin)
+ *   currentUsdtRate  — текущий курс USDT из БД (предзаполняем)
+ *   operatorType     — 'manual' | 'card' | 'auto'
  */
-export default function ConfirmPaymentModal({ isOpen, onClose, onConfirm, order, operatorType = 'manual' }) {
+export default function ConfirmPaymentModal({
+  isOpen,
+  onClose,
+  onConfirm,
+  order,
+  currentUsdtRate = null,
+  operatorType = 'manual',
+}) {
+  const [usdtRateRub, setUsdtRateRub] = useState('');
   const [receivedUsdt, setReceivedUsdt] = useState('');
+  const [editingRate, setEditingRate] = useState(false);
 
   useEffect(() => {
     if (isOpen) {
-      // Предзаполняем ожидаемой суммой
-      setReceivedUsdt(order?.amount_coin ? String(Number(order.amount_coin).toFixed(6)) : '');
+      const sumRub = parseFloat(order?.sum_rub || 0);
+      const rate = currentUsdtRate;
+      if (rate && rate > 0) {
+        setUsdtRateRub(String(rate.toFixed(2)));
+        setReceivedUsdt(sumRub > 0 ? String((sumRub / rate).toFixed(2)) : '');
+      } else {
+        setUsdtRateRub('');
+        setReceivedUsdt('');
+      }
+      setEditingRate(false);
     }
-  }, [isOpen, order]);
+  }, [isOpen, order, currentUsdtRate]);
 
   useEffect(() => {
     if (!isOpen) return;
@@ -33,29 +51,55 @@ export default function ConfirmPaymentModal({ isOpen, onClose, onConfirm, order,
 
   if (!isOpen) return null;
 
-  const amountCoin = parseFloat(order?.amount_coin || 0);
   const sumRub = parseFloat(order?.sum_rub || 0);
-  const rateRub = parseFloat(order?.rate_rub || 0);
   const dir = order?.dir || 'BUY';
   const coin = order?.coin || 'USDT';
+  const amountCoin = parseFloat(order?.amount_coin || 0);
 
+  const rate = parseFloat(usdtRateRub) || 0;
   const received = parseFloat(receivedUsdt) || 0;
-  const actualRate = received > 0 ? sumRub / received : null;
-  const expectedUsdt = amountCoin;
+
+  // При изменении курса — пересчитываем USDT (если пользователь не редактирует USDT вручную)
+  const handleRateChange = (val) => {
+    setUsdtRateRub(val);
+    const r = parseFloat(val) || 0;
+    if (r > 0 && sumRub > 0 && !editingRate) {
+      setReceivedUsdt((sumRub / r).toFixed(2));
+    }
+  };
+
+  // При изменении USDT — пересчитываем курс
+  const handleUsdtChange = (val) => {
+    setReceivedUsdt(val);
+    const u = parseFloat(val) || 0;
+    if (u > 0 && sumRub > 0) {
+      setUsdtRateRub((sumRub / u).toFixed(2));
+    }
+  };
+
+  // Прибыль: RUB от клиента - (USDT × курс USDT)
   let profitRub = null;
-  if (received > 0 && rateRub > 0) {
+  if (received > 0 && rate > 0) {
     if (dir === 'SELL') {
-      profitRub = (received - amountCoin) * rateRub;
+      // Оператор продаёт крипту клиента за USDT
+      profitRub = received * rate - sumRub;
     } else {
-      profitRub = sumRub - received * rateRub;
+      // Клиент платит RUB → оператор покупает USDT
+      profitRub = sumRub - received * rate;
     }
   }
 
-  // Для card/auto операторов поле не нужно — подтверждаем сразу
   const showUsdtField = operatorType === 'manual';
 
   const handleConfirm = () => {
-    onConfirm(showUsdtField && received > 0 ? received : null);
+    if (showUsdtField) {
+      onConfirm({
+        receivedUsdt: received > 0 ? received : null,
+        usdtRateRub: rate > 0 ? rate : null,
+      });
+    } else {
+      onConfirm({ receivedUsdt: null, usdtRateRub: null });
+    }
   };
 
   return createPortal(
@@ -86,9 +130,9 @@ export default function ConfirmPaymentModal({ isOpen, onClose, onConfirm, order,
             <div className={`font-semibold text-right ${dir === 'BUY' ? 'text-green-600' : 'text-red-500'}`}>
               {dir === 'BUY' ? 'Покупка' : 'Продажа'} {coin}
             </div>
-            <div className="text-gray-500 dark:text-gray-400">Ожидаемо {coin}</div>
+            <div className="text-gray-500 dark:text-gray-400">Выплатить клиенту</div>
             <div className="font-mono font-semibold text-right text-gray-700 dark:text-gray-300">
-              {expectedUsdt.toFixed(6)}
+              {amountCoin.toFixed(6)} {coin}
             </div>
             <div className="text-gray-500 dark:text-gray-400">Сумма RUB</div>
             <div className="font-semibold text-right text-gray-700 dark:text-gray-300">
@@ -98,41 +142,63 @@ export default function ConfirmPaymentModal({ isOpen, onClose, onConfirm, order,
 
           {showUsdtField && (
             <>
+              {/* Курс RUB/USDT */}
               <div>
                 <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1.5">
-                  Получено {coin} (фактически)
+                  Курс RUB/USDT (по которому менял)
                 </label>
-                <input
-                  type="number"
-                  step="0.000001"
-                  min="0"
-                  value={receivedUsdt}
-                  onChange={(e) => setReceivedUsdt(e.target.value)}
-                  placeholder={`Например: ${expectedUsdt.toFixed(6)}`}
-                  className="w-full px-4 py-2.5 text-sm rounded-xl border border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-800 text-gray-800 dark:text-gray-200 placeholder-gray-400 focus:outline-none focus:ring-2 focus:ring-green-400 focus:border-transparent transition-shadow font-mono"
-                  autoFocus
-                />
+                <div className="relative">
+                  <input
+                    type="number"
+                    step="0.01"
+                    min="0"
+                    value={usdtRateRub}
+                    onChange={(e) => handleRateChange(e.target.value)}
+                    placeholder="Например: 92.50"
+                    className="w-full px-4 py-2.5 pr-16 text-sm rounded-xl border border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-800 text-gray-800 dark:text-gray-200 placeholder-gray-400 focus:outline-none focus:ring-2 focus:ring-green-400 focus:border-transparent transition-shadow font-mono"
+                    autoFocus
+                  />
+                  <span className="absolute right-4 top-1/2 -translate-y-1/2 text-xs text-gray-400 font-medium">₽/USDT</span>
+                </div>
+              </div>
+
+              {/* Получено USDT */}
+              <div>
+                <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1.5">
+                  Получено USDT (фактически)
+                </label>
+                <div className="relative">
+                  <input
+                    type="number"
+                    step="0.01"
+                    min="0"
+                    value={receivedUsdt}
+                    onChange={(e) => handleUsdtChange(e.target.value)}
+                    placeholder="Например: 1080.00"
+                    className="w-full px-4 py-2.5 pr-16 text-sm rounded-xl border border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-800 text-gray-800 dark:text-gray-200 placeholder-gray-400 focus:outline-none focus:ring-2 focus:ring-green-400 focus:border-transparent transition-shadow font-mono"
+                  />
+                  <span className="absolute right-4 top-1/2 -translate-y-1/2 text-xs text-gray-400 font-medium">USDT</span>
+                </div>
+                <p className="mt-1 text-xs text-gray-400 dark:text-gray-500">
+                  Поля синхронизированы — измените одно, второе пересчитается
+                </p>
               </div>
 
               {/* Расчёт в реальном времени */}
-              {received > 0 && (
+              {received > 0 && rate > 0 && (
                 <div className="p-3 rounded-xl bg-blue-50 dark:bg-blue-900/15 border border-blue-100 dark:border-blue-800/30 space-y-1.5 text-sm">
-                  {actualRate && (
-                    <div className="flex justify-between">
-                      <span className="text-gray-500 dark:text-gray-400">Фактический курс</span>
-                      <span className="font-mono font-semibold text-gray-700 dark:text-gray-300">
-                        {actualRate.toFixed(2)} ₽/{coin}
-                      </span>
-                    </div>
-                  )}
-                  {profitRub !== null && (
-                    <div className="flex justify-between">
-                      <span className="text-gray-500 dark:text-gray-400">Прибыль</span>
-                      <span className={`font-semibold ${profitRub >= 0 ? 'text-green-600 dark:text-green-400' : 'text-red-500'}`}>
-                        {profitRub >= 0 ? '+' : ''}{profitRub.toLocaleString('ru-RU', { minimumFractionDigits: 2, maximumFractionDigits: 2 })} ₽
-                      </span>
-                    </div>
-                  )}
+                  <div className="flex justify-between">
+                    <span className="text-gray-500 dark:text-gray-400">Курс RUB/USDT</span>
+                    <span className="font-mono font-semibold text-gray-700 dark:text-gray-300">
+                      {rate.toFixed(2)} ₽/USDT
+                    </span>
+                  </div>
+                  <div className="flex justify-between">
+                    <span className="text-gray-500 dark:text-gray-400">Получено USDT</span>
+                    <span className="font-mono font-semibold text-gray-700 dark:text-gray-300">
+                      {received.toFixed(2)} $
+                    </span>
+                  </div>
                 </div>
               )}
             </>

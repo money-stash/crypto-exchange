@@ -472,7 +472,19 @@ async def create_bot_requisite(
     import logging as _logging
     _log = _logging.getLogger(__name__)
 
-    await _check_bot_access(bot_id, current_user, db, write=True)
+    if current_user.role == "OPERATOR":
+        # Operator may only create a requisite when assigning it to their own order
+        if not body.order_id:
+            raise HTTPException(403, "Insufficient permissions")
+        order_row = await db.execute(
+            text("SELECT id FROM orders WHERE id = :oid AND bot_id = :bid AND support_id = :uid AND status NOT IN ('COMPLETED','CANCELLED')"),
+            {"oid": body.order_id, "bid": bot_id, "uid": current_user.id},
+        )
+        if not order_row.fetchone():
+            raise HTTPException(403, "Insufficient permissions")
+    else:
+        await _check_bot_access(bot_id, current_user, db, write=True)
+
     req = BotRequisite(
         bot_id=bot_id, type=body.type, address=body.address,
         bank_name=body.bank_name, holder_name=body.holder_name,

@@ -279,6 +279,19 @@ async def handle_user_sent_crypto(callback: CallbackQuery, state, bot_config: di
             """),
             {"id": order_id},
         )
+
+        # Добавляем сервисное сообщение в чат, чтобы кассир/оператор видел уведомление
+        await db.execute(
+            text("""
+                INSERT INTO deal_messages (order_id, sender_type, sender_id, message, is_read, created_at)
+                VALUES (:order_id, 'USER', :user_id, :message, 0, NOW())
+            """),
+            {
+                "order_id": order_id,
+                "user_id": order.user_id,
+                "message": "✅ Пользователь подтвердил оплату",
+            },
+        )
         await db.commit()
 
         # Получаем обновлённую заявку для socket emit
@@ -288,6 +301,12 @@ async def handle_user_sent_crypto(callback: CallbackQuery, state, bot_config: di
         )
         updated_order = dict(updated_row.mappings().one())
 
+        msg_row = await db.execute(
+            text("SELECT * FROM deal_messages WHERE order_id = :id ORDER BY id DESC LIMIT 1"),
+            {"id": order_id},
+        )
+        new_msg = dict(msg_row.mappings().one())
+
     # Уведомляем панель
     try:
         await sio.emit_order_status_changed({
@@ -295,6 +314,12 @@ async def handle_user_sent_crypto(callback: CallbackQuery, state, bot_config: di
             "oldStatus": order.status,
             "newStatus": "AWAITING_CONFIRM",
             "order": updated_order,
+        })
+        await sio.emit_order_updated(updated_order)
+        await sio.emit_order_message({
+            **new_msg,
+            "bot_id": updated_order.get("bot_id"),
+            "support_id": updated_order.get("support_id"),
         })
     except Exception as e:
         logger.warning(f"[BOT] Failed to emit status change for order {order_id}: {e}")

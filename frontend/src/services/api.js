@@ -81,7 +81,13 @@ export const settingsApi = {
   getFinanceSettings: () => api.get('/settings/finance'),
   updateFinanceSettings: (data) => api.put('/settings/finance', data),
   getChatQuickReplies: () => api.get('/settings/chat-quick-replies'),
-  updateChatQuickReplies: (data) => api.put('/settings/chat-quick-replies', data)
+  updateChatQuickReplies: (data) => api.put('/settings/chat-quick-replies', data),
+  // Crypto wallets (auto-payout)
+  getCryptoWallets: () => api.get('/settings/crypto-wallets'),
+  getCryptoWalletBalance: (coin) => api.get(`/settings/crypto-wallets/${coin}/balance`),
+  setCryptoWallet: (coin, mnemonic) => api.put(`/settings/crypto-wallets/${coin}`, { mnemonic }),
+  toggleCryptoWallet: (coin, is_active) => api.patch(`/settings/crypto-wallets/${coin}/toggle`, { is_active }),
+  deleteCryptoWallet: (coin) => api.delete(`/settings/crypto-wallets/${coin}`),
 };
 
 // апи заказов
@@ -115,6 +121,7 @@ export const ordersApi = {
 export const dealsApi = {
   assignDeal: (id, data) => api.post(`/deals/${id}/assign`, data),
   markPayment: (id) => api.post(`/deals/${id}/mark-payment`),
+  getUsdtRate: (id) => api.get(`/deals/${id}/usdt-rate`),
   confirmPayment: (id, data) => api.post(`/deals/${id}/confirm-payment`, data || {}),
   setTransactionHash: (id, data) => api.post(`/deals/${id}/transaction-hash`, data),
   completeDeal: (id, data) => {
@@ -278,6 +285,42 @@ export const auditLogsApi = {
     params,
     responseType: 'blob'
   })
+};
+
+// Cashier (Автовыдача) API
+export const cashiersApi = {
+  // Superadmin — account management
+  listCashiers: (params) => api.get('/cashiers', { params }),
+  createCashier: (data) => api.post('/cashiers', data),
+  getCashier: (id) => api.get(`/cashiers/${id}`),
+  updateCashier: (id, data) => api.put(`/cashiers/${id}`, data),
+  deleteCashier: (id) => api.delete(`/cashiers/${id}`),
+  getVolumeSummary: () => api.get('/cashiers/volume-summary'),
+  getCashierCards: (id) => api.get(`/cashiers/${id}/cards`),
+  adminExtendCardLimit: (cashierId, cardId, extra_volume) =>
+    api.patch(`/cashiers/${cashierId}/cards/${cardId}/extend-limit`, { extra_volume }),
+
+  // Routing setting
+  getRoutingSetting: () => api.get('/cashiers/routing-setting'),
+  updateRoutingSetting: (interval) => api.put('/cashiers/routing-setting', { interval }),
+
+  // Cashier self
+  getMyStats: () => api.get('/cashiers/me/stats'),
+  getMyCards: () => api.get('/cashiers/me/cards'),
+  addMyCard: (data) => api.post('/cashiers/me/cards', data),
+  updateMyCard: (cardId, data) => api.put(`/cashiers/me/cards/${cardId}`, data),
+  deleteMyCard: (cardId) => api.delete(`/cashiers/me/cards/${cardId}`),
+  extendMyCardLimit: (cardId, extra_volume) =>
+    api.patch(`/cashiers/me/cards/${cardId}/extend-limit`, { extra_volume }),
+
+  // Cashier deposit (self)
+  getMyDeposit: () => api.get('/cashiers/me/deposit'),
+  getMyDepositHistory: (params) => api.get('/cashiers/me/deposit/history', { params }),
+  topupMyDeposit: (data) => api.post('/cashiers/me/deposit/topup', data),
+
+  // Cashier deposit (admin)
+  getCashierDeposit: (id) => api.get(`/cashiers/${id}/deposit`),
+  adjustCashierDeposit: (id, data) => api.post(`/cashiers/${id}/deposit/adjust`, data),
 };
 
 export default api;

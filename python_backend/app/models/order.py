@@ -33,6 +33,7 @@ class Order(Base):
     exch_crypto_address = Column(String(255), nullable=True)
     exch_sbp_phone = Column(String(20), nullable=True)
     exch_req_id = Column(BigInteger, nullable=True)
+    cashier_card_id = Column(BigInteger, nullable=True)    # FK cashier_cards.id (auto-payout)
     created_at = Column(DateTime, server_default=func.now())
     updated_at = Column(DateTime, server_default=func.now(), onupdate=func.now())
     user_bot_id = Column(Integer, nullable=True)

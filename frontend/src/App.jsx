@@ -28,6 +28,8 @@ import ReferralWithdrawalsPage from './pages/ReferralWithdrawalsPage';
 import OperatorManagerChatsPage from './pages/OperatorManagerChatsPage';
 import AuditLogsPage from './pages/AuditLogsPage';
 import FinancePage from './pages/FinancePage';
+import CashierPage from './pages/CashierPage';
+import CashiersManagementPage from './pages/CashiersManagementPage';
 
 const ProtectedRoute = ({ children, requiredRole = null }) => {
   const { isAuthenticated, user, loading } = useAuth();
@@ -161,6 +163,16 @@ const AppRoutes = () => {
             <Route path="finance" element={
               <ProtectedRoute requiredRole="SUPERADMIN">
                 <FinancePage />
+              </ProtectedRoute>
+            } />
+            <Route path="cashier" element={
+              <ProtectedRoute requiredRole="CASHIER">
+                <CashierPage />
+              </ProtectedRoute>
+            } />
+            <Route path="cashiers" element={
+              <ProtectedRoute requiredRole="SUPERADMIN">
+                <CashiersManagementPage />
               </ProtectedRoute>
             } />
           </Route>

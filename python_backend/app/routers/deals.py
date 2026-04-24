@@ -5,14 +5,16 @@ Deals router — обработка этапов заявки:
   POST /:id/complete           — завершить заявку
   POST /:id/transaction-hash   — сохранить хэш транзакции
 """
-from fastapi import APIRouter, Depends, HTTPException
+import asyncio
+
+from fastapi import APIRouter, Depends, HTTPException, Request
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession
 from typing import Optional
 from pydantic import BaseModel
 import logging
 
-from app.database import get_db
+from app.database import get_db, AsyncSessionLocal
 from app.middleware.auth import require_auth
 from app.models.support import Support
 import app.socket.socket_service as sio
@@ -35,6 +37,138 @@ ORDER_SELECT = """
 """
 
 
+# ── Авто-выдача крипты ────────────────────────────────────────────────────────
+
+async def _auto_send_crypto(
+    order_id: int,
+    coin: str,
+    mnemonic: str,
+    to_address: str,
+    amount: float,
+    bot_id: Optional[int],
+    tg_id: Optional[int],
+    unique_id,
+) -> None:
+    """
+    Фоновая задача: отправляет крипту клиенту после подтверждения оплаты кассиром.
+    Создаёт новую сессию БД (не зависит от сессии родительского запроса).
+    """
+    from app.services.crypto_wallet_service import send_coin
+
+    tx_hash: Optional[str] = None
+    send_error: Optional[str] = None
+
+    try:
+        logger.info(f"[AUTO-SEND] Начинаю отправку {amount} {coin} → {to_address} для заявки {order_id}")
+        tx_hash = await send_coin(coin, mnemonic, to_address, amount)
+        logger.info(f"[AUTO-SEND] Успешно! order={order_id} tx={tx_hash}")
+    except Exception as exc:
+        send_error = str(exc)
+        logger.error(f"[AUTO-SEND] Ошибка для заявки {order_id}: {exc}")
+
+    async with AsyncSessionLocal() as db:
+        if tx_hash:
+            # Завершаем заявку с хешем
+            await db.execute(
+                text("""
+                    UPDATE orders SET
+                        hash = :hash,
+                        status = 'COMPLETED',
+                        completed_at = NOW(),
+                        updated_at = NOW()
+                    WHERE id = :id
+                """),
+                {"hash": tx_hash, "id": order_id},
+            )
+            await db.commit()
+
+            # Получаем обновлённую заявку для socket
+            updated_row = await db.execute(
+                text(f"{ORDER_SELECT} WHERE o.id = :id"), {"id": order_id}
+            )
+            updated_order = dict(updated_row.mappings().one())
+
+            # Списываем с депозита кассира (заморозка → постоянное списание)
+            try:
+                order_row = await db.execute(
+                    text("SELECT support_id, sum_rub, cashier_card_id FROM orders WHERE id = :id"),
+                    {"id": order_id},
+                )
+                o = order_row.mappings().one_or_none()
+                if o and o["cashier_card_id"] and o["support_id"]:
+                    sum_rub_val = float(o["sum_rub"] or 0)
+                    await db.execute(
+                        text("""
+                            UPDATE supports SET
+                                deposit      = GREATEST(0, deposit - :amount),
+                                deposit_work = GREATEST(0, deposit_work - :amount),
+                                deposit_paid = deposit_paid + :amount
+                            WHERE id = :uid AND role = 'CASHIER'
+                        """),
+                        {"amount": sum_rub_val, "uid": o["support_id"]},
+                    )
+                    await db.commit()
+            except Exception as e:
+                logger.warning(f"[AUTO-SEND] Deposit deduction failed for order {order_id}: {e}")
+
+            # Emit socket
+            try:
+                await sio.emit_order_status_changed({
+                    "orderId": order_id,
+                    "oldStatus": "AWAITING_HASH",
+                    "newStatus": "COMPLETED",
+                    "order": updated_order,
+                })
+                await sio.emit_order_updated(updated_order)
+            except Exception as e:
+                logger.warning(f"[AUTO-SEND] socket emit error: {e}")
+
+            # Уведомляем клиента в Telegram
+            if bot_id and tg_id:
+                try:
+                    from bot.manager import bot_manager
+                    await bot_manager.send_message(
+                        bot_id,
+                        int(tg_id),
+                        f"✅ <b>Заявка #{unique_id} завершена!</b>\n\n"
+                        f"Мы отправили вам {coin}.\n\n"
+                        f"Хеш транзакции:\n<code>{tx_hash}</code>\n\n"
+                        f"Транзакция подтвердится в сети в течение нескольких минут.",
+                        parse_mode="HTML",
+                    )
+                except Exception as e:
+                    logger.warning(f"[AUTO-SEND] TG notify error: {e}")
+        else:
+            # Отправка не удалась — оставляем AWAITING_HASH для ручной обработки
+            # Добавляем системное сообщение в чат
+            await db.execute(
+                text("""
+                    INSERT INTO deal_messages (order_id, sender_type, message, is_read, created_at)
+                    VALUES (:oid, 'OPERATOR', :msg, 0, NOW())
+                """),
+                {
+                    "oid": order_id,
+                    "msg": f"⚠️ Авто-отправка {coin} не удалась: {send_error}. Требуется ручная обработка.",
+                },
+            )
+            await db.commit()
+
+            # Уведомляем клиента что транзакция обрабатывается
+            if bot_id and tg_id:
+                try:
+                    from bot.manager import bot_manager
+                    await bot_manager.send_message(
+                        bot_id,
+                        int(tg_id),
+                        f"⏳ <b>Заявка #{unique_id} — ваша транзакция в обработке</b>\n\n"
+                        f"Перевод {coin} поставлен в очередь. "
+                        f"Ваши деньги придут в ближайшее время.",
+                        parse_mode="HTML",
+                    )
+                except Exception as e:
+                    logger.warning(f"[AUTO-SEND] TG fallback notify error: {e}")
+
+
 async def _get_order(order_id: int, db: AsyncSession) -> dict:
     row = await db.execute(text("SELECT * FROM orders WHERE id = :id"), {"id": order_id})
     order = row.mappings().one_or_none()
@@ -52,6 +186,7 @@ async def _emit_updated(order_id: int, old_status: str, new_status: str, db: Asy
         "newStatus": new_status,
         "order": order,
     })
+    await sio.emit_order_updated(order)
     return order
 
 
@@ -88,11 +223,55 @@ async def mark_payment(
 
 
 # ---------------------------------------------------------------------------
+# GET /:id/usdt-rate  — текущий курс USDT для формы подтверждения оплаты
+# ---------------------------------------------------------------------------
+
+@router.get("/{order_id}/usdt-rate")
+async def get_usdt_rate_for_confirm(
+    order_id: int,
+    current_user: Support = Depends(require_auth),
+    db: AsyncSession = Depends(get_db),
+):
+    """Возвращает текущий курс USDT и данные для расчёта выплаты клиенту."""
+    order = await _get_order(order_id, db)
+
+    usdt_row = await db.execute(
+        text("SELECT rate_rub, is_manual, manual_rate_rub FROM rates WHERE coin = 'USDT'")
+    )
+    usdt_rate = usdt_row.mappings().one_or_none()
+    if not usdt_rate:
+        raise HTTPException(500, "Курс USDT не найден")
+
+    effective_usdt_rate = float(usdt_rate["manual_rate_rub"] if usdt_rate["is_manual"] and usdt_rate["manual_rate_rub"] else usdt_rate["rate_rub"])
+
+    coin = order.get("coin", "")
+    amount_coin = float(order.get("amount_coin") or 0)
+    sum_rub = float(order.get("sum_rub") or 0)
+
+    # Расчёт ожидаемого USDT по текущему курсу
+    expected_usdt = round(sum_rub / effective_usdt_rate, 8) if effective_usdt_rate > 0 else 0
+
+    return {
+        "usdt_rate_rub": effective_usdt_rate,
+        "expected_received_usdt": expected_usdt,
+        "payout": {
+            "coin": coin,
+            "amount_coin": amount_coin,
+            "address": order.get("user_crypto_address"),
+            "card_number": order.get("user_card_number"),
+            "card_holder": order.get("user_card_holder"),
+            "bank_name": order.get("user_bank_name"),
+        },
+    }
+
+
+# ---------------------------------------------------------------------------
 # POST /:id/confirm-payment  — оператор подтверждает оплату + финансовые данные
 # ---------------------------------------------------------------------------
 
 class ConfirmPaymentBody(BaseModel):
-    received_usdt: Optional[float] = None  # сколько USDT получил оператор
+    received_usdt: Optional[float] = None   # сколько USDT получил оператор
+    usdt_rate_rub: Optional[float] = None   # курс RUB/USDT по которому менял оператор
 
 
 @router.post("/{order_id}/confirm-payment")
@@ -118,27 +297,68 @@ async def confirm_payment(
             f"Неверный статус: {old_status}. Ожидается: {', '.join(allowed)}"
         )
 
-    # Финансовые данные
-    received_usdt = (body.received_usdt if body and body.received_usdt else None)
     amount_coin = float(order.get("amount_coin") or 0)
     sum_rub = float(order.get("sum_rub") or 0)
-    rate_rub = float(order.get("rate_rub") or 0)
+    coin = order.get("coin", "")
 
-    operator_profit_rub = None
-    operator_rate_rub = None
+    # Определяем received_usdt и usdt_rate_rub
+    received_usdt: Optional[float] = body.received_usdt if body else None
+    usdt_rate_rub: Optional[float] = body.usdt_rate_rub if body else None
 
-    if received_usdt and received_usdt > 0:
-        # Фактический курс = сумма RUB / полученный USDT
-        operator_rate_rub = round(sum_rub / received_usdt, 8) if received_usdt else None
-        # Прибыль = разница между ожидаемым и фактическим кол-вом USDT × курс клиента
-        # SELL: оператор продал крипту, получил received_usdt → должен отдать amount_coin клиенту
-        # BUY: клиент заплатил sum_rub, оператор купил received_usdt ≈ amount_coin
+    if usdt_rate_rub and usdt_rate_rub > 0 and not received_usdt:
+        # Оператор ввёл курс → вычисляем сколько USDT должно было быть получено
+        received_usdt = round(sum_rub / usdt_rate_rub, 8)
+    elif received_usdt and received_usdt > 0 and not usdt_rate_rub:
+        # Оператор ввёл USDT → вычисляем курс
+        usdt_rate_rub = round(sum_rub / received_usdt, 8)
+    elif not received_usdt and not usdt_rate_rub:
+        # Ничего не передано → берём текущий курс USDT из БД
+        usdt_row = await db.execute(
+            text("SELECT rate_rub, is_manual, manual_rate_rub FROM rates WHERE coin = 'USDT'")
+        )
+        usdt_rate = usdt_row.mappings().one_or_none()
+        if usdt_rate:
+            usdt_rate_rub = float(
+                usdt_rate["manual_rate_rub"]
+                if usdt_rate["is_manual"] and usdt_rate["manual_rate_rub"]
+                else usdt_rate["rate_rub"]
+            )
+            if usdt_rate_rub > 0:
+                received_usdt = round(sum_rub / usdt_rate_rub, 8)
+
+    # Расчёт прибыли оператора (в рублях)
+    operator_profit_rub: Optional[float] = None
+    if received_usdt and usdt_rate_rub:
         if direction == "SELL":
-            # Прибыль = что получили минус что должны были получить, × курс
-            operator_profit_rub = round((received_usdt - amount_coin) * rate_rub, 2)
+            # Клиент продаёт крипту → оператор её продаёт за USDT
+            # Прибыль = (полученный USDT − что должны были получить) × курс USDT
+            expected_usdt = round(sum_rub / usdt_rate_rub, 8)
+            operator_profit_rub = round((received_usdt - expected_usdt) * usdt_rate_rub, 2)
         else:  # BUY
-            # Прибыль = что клиент заплатил минус что потратили на покупку
-            operator_profit_rub = round(sum_rub - received_usdt * rate_rub, 2)
+            # Клиент платит RUB → оператор покупает USDT
+            # Прибыль = RUB от клиента − потраченные RUB на покупку USDT
+            operator_profit_rub = round(sum_rub - received_usdt * usdt_rate_rub, 2)
+
+    # Проверяем и замораживаем депозит кассира (если это авто-выдача заявка)
+    cashier_support_id = order.get("support_id")
+    if order.get("cashier_card_id") and cashier_support_id:
+        dep_row = await db.execute(
+            text("SELECT deposit, deposit_work FROM supports WHERE id = :uid AND role = 'CASHIER'"),
+            {"uid": cashier_support_id},
+        )
+        dep = dep_row.mappings().one_or_none()
+        if dep:
+            available = float(dep["deposit"] or 0) - float(dep["deposit_work"] or 0)
+            if available < sum_rub:
+                raise HTTPException(
+                    400,
+                    f"Недостаточно средств в депозите кассира. "
+                    f"Доступно: {available:.2f} ₽, нужно: {sum_rub:.2f} ₽"
+                )
+            await db.execute(
+                text("UPDATE supports SET deposit_work = deposit_work + :amount WHERE id = :uid"),
+                {"amount": sum_rub, "uid": cashier_support_id},
+            )
 
     # Обновляем заявку
     update_fields = "status = 'AWAITING_HASH', updated_at = NOW()"
@@ -147,9 +367,9 @@ async def confirm_payment(
     if received_usdt is not None:
         update_fields += ", operator_received_usdt = :received_usdt"
         params["received_usdt"] = received_usdt
-    if operator_rate_rub is not None:
+    if usdt_rate_rub is not None:
         update_fields += ", operator_rate_rub = :op_rate"
-        params["op_rate"] = operator_rate_rub
+        params["op_rate"] = usdt_rate_rub
     if operator_profit_rub is not None:
         update_fields += ", operator_profit_rub = :op_profit"
         params["op_profit"] = operator_profit_rub
@@ -161,7 +381,58 @@ async def confirm_payment(
     await db.execute(text(f"UPDATE orders SET {update_fields} WHERE id = :id"), params)
     updated_order = await _emit_updated(order_id, old_status, "AWAITING_HASH", db)
 
-    return {"success": True, "orderDetails": updated_order}
+    # Данные для авто-выплаты клиенту
+    payout_info = {
+        "coin": coin,
+        "amount_coin": amount_coin,
+        "address": order.get("user_crypto_address"),
+        "card_number": order.get("user_card_number"),
+        "card_holder": order.get("user_card_holder"),
+        "bank_name": order.get("user_bank_name"),
+        "received_usdt": received_usdt,
+        "usdt_rate_rub": usdt_rate_rub,
+    }
+
+    # ── Авто-отправка крипты ─────────────────────────────────────────────
+    # Только для BUY-заявок с криптовалютным адресом клиента
+    auto_send_triggered = False
+    if direction == "BUY" and order.get("user_crypto_address") and amount_coin > 0:
+        try:
+            from app.services.crypto_wallet_service import get_active_mnemonic, SUPPORTED_COINS
+            if coin in SUPPORTED_COINS:
+                mnemonic = await get_active_mnemonic(coin, db)
+                if mnemonic:
+                    # Получаем tg_id пользователя
+                    tg_row = await db.execute(
+                        text("SELECT u.tg_id FROM orders o JOIN users u ON u.id = o.user_id WHERE o.id = :id"),
+                        {"id": order_id},
+                    )
+                    tg_rec = tg_row.fetchone()
+                    tg_id = int(tg_rec.tg_id) if tg_rec else None
+                    bot_id = order.get("bot_id")
+                    unique_id = order.get("unique_id")
+
+                    asyncio.create_task(_auto_send_crypto(
+                        order_id=order_id,
+                        coin=coin,
+                        mnemonic=mnemonic,
+                        to_address=order["user_crypto_address"],
+                        amount=amount_coin,
+                        bot_id=bot_id,
+                        tg_id=tg_id,
+                        unique_id=unique_id,
+                    ))
+                    auto_send_triggered = True
+                    logger.info(f"[AUTO-SEND] Задача запущена для заявки {order_id} ({coin} → {order['user_crypto_address']})")
+        except Exception as e:
+            logger.error(f"[AUTO-SEND] Не удалось запустить задачу для заявки {order_id}: {e}")
+
+    return {
+        "success": True,
+        "orderDetails": updated_order,
+        "payoutInfo": payout_info,
+        "autoSendTriggered": auto_send_triggered,
+    }
 
 
 # ---------------------------------------------------------------------------
@@ -200,6 +471,7 @@ async def set_transaction_hash(
 @router.post("/{order_id}/complete")
 async def complete_deal(
     order_id: int,
+    request: Request,
     current_user: Support = Depends(require_auth),
     db: AsyncSession = Depends(get_db),
 ):
@@ -208,6 +480,26 @@ async def complete_deal(
 
     if old_status not in ("AWAITING_HASH", "AWAITING_CONFIRM", "PAYMENT_PENDING"):
         raise HTTPException(400, f"Невозможно завершить заявку со статусом {old_status}")
+
+    # Extract hash from FormData or JSON body (frontend passes it here for BUY orders)
+    transaction_hash: Optional[str] = None
+    content_type = request.headers.get("content-type", "")
+    if "multipart/form-data" in content_type:
+        form = await request.form()
+        transaction_hash = (form.get("transactionHash") or form.get("hash") or "").strip() or None
+    else:
+        try:
+            body = await request.json()
+            transaction_hash = (body.get("transactionHash") or body.get("hash") or "").strip() or None
+        except Exception:
+            pass
+
+    # Save hash if provided
+    if transaction_hash:
+        await db.execute(
+            text("UPDATE orders SET hash = :hash WHERE id = :id"),
+            {"hash": transaction_hash, "id": order_id},
+        )
 
     await db.execute(
         text("""
@@ -219,6 +511,30 @@ async def complete_deal(
         """),
         {"id": order_id},
     )
+
+    # Track cashier card volume on completion
+    try:
+        from app.services.cashier_service import on_order_completed
+        await on_order_completed(order, db)
+    except Exception as exc:
+        logger.warning(f"Cashier volume tracking failed for order {order_id}: {exc}")
+
+    # Deduct from cashier deposit (manual completion path)
+    if order.get("cashier_card_id") and order.get("support_id"):
+        try:
+            sum_rub_val = float(order.get("sum_rub") or 0)
+            await db.execute(
+                text("""
+                    UPDATE supports SET
+                        deposit      = GREATEST(0, deposit - :amount),
+                        deposit_work = GREATEST(0, deposit_work - :amount),
+                        deposit_paid = deposit_paid + :amount
+                    WHERE id = :uid AND role = 'CASHIER'
+                """),
+                {"amount": sum_rub_val, "uid": order["support_id"]},
+            )
+        except Exception as exc:
+            logger.warning(f"Deposit deduction failed for order {order_id}: {exc}")
 
     # Обновляем итоги смены если привязана
     shift_id = order.get("shift_id")
@@ -239,4 +555,31 @@ async def complete_deal(
         )
 
     updated_order = await _emit_updated(order_id, old_status, "COMPLETED", db)
+
+    # Notify user in Telegram that order is completed (with hash for BUY orders)
+    try:
+        from bot.manager import bot_manager
+        tg_row = await db.execute(
+            text("SELECT u.tg_id FROM orders o JOIN users u ON u.id = o.user_id WHERE o.id = :id"),
+            {"id": order_id},
+        )
+        tg_data = tg_row.fetchone()
+        bot_id = updated_order.get("bot_id")
+        unique_id = updated_order.get("unique_id")
+        direction = updated_order.get("dir", "")
+        if tg_data and bot_id:
+            if direction == "BUY" and transaction_hash:
+                msg = (
+                    f"✅ <b>Заявка #{unique_id} завершена!</b>\n\n"
+                    f"Мы отправили вам крипту. Хеш транзакции:\n"
+                    f"<code>{transaction_hash}</code>"
+                )
+            elif direction == "BUY":
+                msg = f"✅ <b>Заявка #{unique_id} завершена!</b>\n\nКрипта отправлена на ваш адрес."
+            else:
+                msg = f"✅ <b>Заявка #{unique_id} завершена!</b>\n\nСпасибо за обмен!"
+            await bot_manager.send_message(bot_id, int(tg_data.tg_id), msg, parse_mode="HTML")
+    except Exception as e:
+        logger.warning(f"Failed to notify user on order {order_id} completion: {e}")
+
     return {"success": True, "orderDetails": updated_order}

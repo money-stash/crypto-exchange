@@ -28,6 +28,10 @@ def _order_where(role: str, user_id: int, filters: dict) -> tuple[str, dict]:
     if role == "OPERATOR":
         parts.append("o.support_id = :uid")
         params["uid"] = user_id
+    elif role == "CASHIER":
+        # Cashiers see orders where their card was used
+        parts.append("o.cashier_card_id IN (SELECT id FROM cashier_cards WHERE cashier_id = :uid)")
+        params["uid"] = user_id
     elif role == "EX_ADMIN":
         parts.append("o.bot_id IN (SELECT id FROM bots WHERE owner_id = :uid)")
         params["uid"] = user_id
@@ -255,7 +259,7 @@ async def get_order_details(
         raise HTTPException(404, "Order not found")
     order = dict(order)
 
-    if current_user.role == "OPERATOR" and order.get("support_id") != current_user.id:
+    if current_user.role in ("OPERATOR", "CASHIER") and order.get("support_id") != current_user.id:
         raise HTTPException(403, "Access denied")
 
     return order
@@ -295,6 +299,25 @@ async def cancel_order(
         text("UPDATE orders SET status = 'CANCELLED', cancel_reason = :reason, updated_at = NOW() WHERE id = :id"),
         {"id": order_id, "reason": cancel_reason},
     )
+
+    # Unfreeze cashier deposit if the order was in a frozen state (AWAITING_HASH)
+    # (AWAITING_HASH is blocked for operator cancel above, but SUPERADMIN/MANAGER can still cancel)
+    if order.get("cashier_card_id") and order.get("support_id"):
+        frozen_statuses = ("AWAITING_HASH", "PAYMENT_PENDING", "AWAITING_CONFIRM")
+        if order["status"] in frozen_statuses:
+            sum_rub_val = float(order.get("sum_rub") or 0)
+            try:
+                await db.execute(
+                    text("""
+                        UPDATE supports
+                        SET deposit_work = GREATEST(0, deposit_work - :amount)
+                        WHERE id = :uid AND role = 'CASHIER'
+                    """),
+                    {"amount": sum_rub_val, "uid": order["support_id"]},
+                )
+            except Exception as exc:
+                logger.warning(f"Deposit unfreeze failed on cancel for order {order_id}: {exc}")
+
     updated = await db.execute(
         text(f"{ORDER_SELECT} WHERE o.id = :id"), {"id": order_id}
     )
@@ -339,7 +362,7 @@ async def take_order(
         raise HTTPException(400, "Active limit exceeded")
 
     await db.execute(
-        text("UPDATE orders SET support_id = :uid, status = 'QUEUED', updated_at = NOW() WHERE id = :id"),
+        text("UPDATE orders SET support_id = :uid, status = 'PAYMENT_PENDING', sla_started_at = NOW(), updated_at = NOW() WHERE id = :id"),
         {"uid": current_user.id, "id": order_id},
     )
     await db.commit()  # commit before socket emit to avoid race condition

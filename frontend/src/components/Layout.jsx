@@ -28,8 +28,9 @@ const Layout = () => {
   useOperatorUiAutoTranslation(user);
   const { theme, toggleTheme, isDark } = useTheme();
   const location = useLocation();
+  const isCashier = (user?.role || '').toUpperCase() === 'CASHIER';
   const canSeePaymentsHistoryMenu = ['OPERATOR', 'MANAGER', 'SUPERADMIN'].includes((user?.role || '').toUpperCase());
-  const canSeeOperatorsRatingMenu = (user?.role || '').toUpperCase() !== 'OPERATOR';
+  const canSeeOperatorsRatingMenu = (user?.role || '').toUpperCase() !== 'OPERATOR' && !isCashier;
   const canSeeChatsMenu = ['OPERATOR', 'MANAGER', 'SUPERADMIN'].includes((user?.role || '').toUpperCase());
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const [chatsUnreadCount, setChatsUnreadCount] = useState(0);
@@ -76,6 +77,7 @@ const Layout = () => {
   const navigation = [
     { name: 'Статистика', href: '/', icon: HomeIcon },
     { name: 'Заявки', href: '/orders', icon: DocumentTextIcon },
+    ...(isCashier ? [{ name: 'Мои карты', href: '/cashier', icon: BanknotesIcon }] : []),
     ...(canSeePaymentsHistoryMenu ? [{ name: 'Депозит', href: '/payments', icon: BanknotesIcon }] : []),
     ...(user?.role === 'SUPERADMIN'
       ? [{ name: 'Курсы', href: '/rates', icon: CurrencyDollarIcon }]
@@ -93,6 +95,7 @@ const Layout = () => {
     ...(isManager ? [{ name: 'Настройки', href: '/settings', icon: CogIcon }] : []),
     ...(isAdmin ? [
       { name: 'Сотрудники', href: '/supports', icon: UserGroupIcon },
+      { name: 'Автовыдача', href: '/cashiers', icon: CurrencyDollarIcon },
       { name: 'Логи', href: '/logs', icon: ScrollText },
     ] : []),
     ...(user?.role === 'SUPERADMIN'
