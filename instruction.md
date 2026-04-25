@@ -23,7 +23,7 @@ mysql_secure_installation   # задайте пароль root
 mysql -u root -p
 
 CREATE DATABASE exchange_db CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
-CREATE USER 'exchange'@'localhost' IDENTIFIED BY 'СИЛЬНЫЙ_ПАРОЛЬ';
+CREATE USER 'exchange'@'localhost' IDENTIFIED BY 'StrongPassword123';
 GRANT ALL PRIVILEGES ON exchange_db.* TO 'exchange'@'localhost';
 FLUSH PRIVILEGES;
 EXIT;
