@@ -1,5 +1,6 @@
 from contextlib import asynccontextmanager
 import logging
+import asyncio
 
 import socketio
 import sqlalchemy
@@ -7,6 +8,7 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 from jose import JWTError, jwt
+from apscheduler.schedulers.asyncio import AsyncIOScheduler
 
 from app.config import settings
 from app.database import engine
@@ -90,13 +92,68 @@ async def on_authenticate(sid, data):
     await sio.emit("authenticated", {"success": True, "userId": user_id, "role": role}, to=sid)
 
 
+async def _update_rates_job():
+    """Фоновое задание — обновляет курсы с внешних бирж."""
+    try:
+        from app.routers.rates import (
+            _fetch_usdt_rub, _fetch_spot_ask, _fetch_xmr_usdt_kraken,
+        )
+        from app.database import AsyncSessionLocal
+        from sqlalchemy import text as _text
+
+        usdt_rub, btc_usdt, ltc_usdt, xmr_usdt = await asyncio.gather(
+            _fetch_usdt_rub(position=3),
+            _fetch_spot_ask("BTCUSDT"),
+            _fetch_spot_ask("LTCUSDT"),
+            _fetch_xmr_usdt_kraken(),
+        )
+        market = {
+            "USDT": usdt_rub,
+            "BTC":  btc_usdt * usdt_rub,
+            "LTC":  ltc_usdt * usdt_rub,
+            "XMR":  xmr_usdt * usdt_rub,
+        }
+        async with AsyncSessionLocal() as db:
+            for coin, rate_rub in market.items():
+                row = await db.execute(
+                    _text("SELECT is_manual FROM rates WHERE coin = :coin"), {"coin": coin}
+                )
+                existing = row.mappings().one_or_none()
+                if existing and existing["is_manual"] == 1:
+                    continue
+                await db.execute(_text("""
+                    INSERT INTO rates (coin, rate_rub, src, is_manual, manual_rate_rub)
+                    VALUES (:coin, :rate_rub, :src, 0, NULL)
+                    ON DUPLICATE KEY UPDATE
+                        rate_rub = VALUES(rate_rub), src = VALUES(src), updated_at = NOW()
+                """), {"coin": coin, "rate_rub": rate_rub,
+                       "src": "bybit_p2p" if coin == "USDT" else "bybit_kraken"})
+            await db.commit()
+        logger.info(f"✅ Rates updated: BTC={market['BTC']:.0f} LTC={market['LTC']:.0f} "
+                    f"XMR={market['XMR']:.0f} USDT={market['USDT']:.2f}")
+    except Exception as exc:
+        logger.warning(f"⚠️  Rate update failed: {exc}")
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     async with engine.connect() as conn:
         await conn.execute(sqlalchemy.text("SELECT 1"))
     print("✅ Database connected")
     await bot_manager.initialize()
+
+    # Сразу обновляем курсы при старте
+    await _update_rates_job()
+
+    # Планировщик: обновляем курсы каждые 5 минут
+    scheduler = AsyncIOScheduler()
+    scheduler.add_job(_update_rates_job, "interval", minutes=5, id="update_rates")
+    scheduler.start()
+    logger.info("✅ Rate scheduler started (every 5 min)")
+
     yield
+
+    scheduler.shutdown(wait=False)
     await bot_manager.stop_all()
     await engine.dispose()
     print("🛑 Database disconnected")
