@@ -137,3 +137,4 @@ temp/
 
 # Docker
 docker-compose.override.yml
+venv/
