@@ -64,6 +64,7 @@ export const supportsApi = {
   updateMaxOrders: (id, maxOrders) => api.patch(`/supports/${id}/max-orders`, { maxOrders }),
   updateDeposit: (id, data) => api.patch(`/supports/${id}/deposit`, data),
   getOperatorsRating: () => api.get('/supports/rating/top'),
+  getOperatorOrders: (id, params) => api.get(`/supports/${id}/operator-orders`, { params }),
   getMyDebt: () => api.get('/supports/me/debt'),
   createMyDebtIntent: (requestedUsdt) => api.post('/supports/me/debt/intents', { requested_usdt: requestedUsdt }),
   getMyDebtIntentStatus: (intentId) => api.get(`/supports/me/debt/intents/${intentId}`),

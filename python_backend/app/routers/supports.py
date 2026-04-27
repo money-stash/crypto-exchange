@@ -55,23 +55,116 @@ async def get_operators_rating(
     current_user: Support = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
-    rows = await db.execute(
-        text("SELECT id, login, rating FROM supports WHERE role = 'OPERATOR' ORDER BY rating DESC LIMIT 10")
-    )
-    top = [{"id": r.id, "login": r.login, "username": r.login, "rating": r.rating} for r in rows]
+    _RATING_SQL = """
+        SELECT
+            s.id, s.login, s.rating, s.created_at,
+            COUNT(o.id) AS orders_count,
+            COUNT(CASE WHEN o.status = 'COMPLETED' THEN 1 END) AS completed_count,
+            SUM(CASE WHEN o.status = 'COMPLETED' THEN o.sum_rub ELSE 0 END) AS total_volume_rub,
+            AVG(CASE
+                WHEN o.sla_requisites_setup_at IS NOT NULL AND o.sla_started_at IS NOT NULL
+                THEN TIMESTAMPDIFF(SECOND, o.sla_started_at, o.sla_requisites_setup_at)
+            END) AS avg_setup_seconds,
+            AVG(CASE
+                WHEN o.status = 'COMPLETED' AND o.completed_at IS NOT NULL AND o.sla_user_paid_at IS NOT NULL
+                THEN TIMESTAMPDIFF(SECOND, o.sla_user_paid_at, o.completed_at)
+            END) AS avg_close_seconds
+        FROM supports s
+        LEFT JOIN orders o ON o.support_id = s.id
+        WHERE s.role = 'OPERATOR'
+        GROUP BY s.id, s.login, s.rating, s.created_at
+        ORDER BY s.rating DESC
+    """
+
+    rows = await db.execute(text(_RATING_SQL + " LIMIT 10"))
+
+    def _format_op(r, position=None):
+        d = {
+            "id": r.id,
+            "login": r.login,
+            "username": r.login,
+            "created_at": r.created_at.isoformat() if r.created_at else None,
+            "orders_count": int(r.orders_count or 0),
+            "completed_count": int(r.completed_count or 0),
+            "total_volume_rub": float(r.total_volume_rub or 0),
+            "avg_setup_seconds": float(r.avg_setup_seconds) if r.avg_setup_seconds else None,
+            "avg_close_seconds": float(r.avg_close_seconds) if r.avg_close_seconds else None,
+            "rating": {
+                "overall_rating": float(r.rating or 0),
+                "speed_rating": float(r.rating or 0),
+                "user_rating": float(r.rating or 0),
+                "orders_count": int(r.orders_count or 0),
+                "details": {"orders_with_ratings": 0},
+            },
+        }
+        if position is not None:
+            d["position"] = position
+        return d
+
+    top_rows = list(rows)
+    top = [_format_op(r) for r in top_rows]
 
     current_data = None
     if current_user.role == "OPERATOR":
-        all_rows = await db.execute(
-            text("SELECT id, login, rating FROM supports WHERE role = 'OPERATOR' ORDER BY rating DESC")
-        )
+        all_rows = await db.execute(text(_RATING_SQL))
         all_ops = list(all_rows)
         idx = next((i for i, r in enumerate(all_ops) if r.id == current_user.id), None)
         if idx is not None:
-            op = all_ops[idx]
-            current_data = {"id": op.id, "login": op.login, "username": op.login, "rating": op.rating, "position": idx + 1}
+            current_data = _format_op(all_ops[idx], position=idx + 1)
 
     return {"top": top, "current": current_data}
+
+
+# ---------------------------------------------------------------------------
+# GET /:id/operator-orders  — список сделок оператора
+# ---------------------------------------------------------------------------
+
+@router.get("/{support_id}/operator-orders")
+async def get_operator_orders(
+    support_id: int,
+    page: int = Query(1, ge=1),
+    limit: int = Query(30, ge=1, le=100),
+    current_user: Support = Depends(require_manager_up),
+    db: AsyncSession = Depends(get_db),
+):
+    offset = (page - 1) * limit
+    rows = await db.execute(text("""
+        SELECT
+            o.id, o.dir, o.coin, o.sum_rub, o.amount_coin, o.status, o.created_at,
+            CASE
+                WHEN o.sla_requisites_setup_at IS NOT NULL AND o.sla_started_at IS NOT NULL
+                THEN TIMESTAMPDIFF(SECOND, o.sla_started_at, o.sla_requisites_setup_at)
+            END AS requisite_setup_seconds,
+            CASE
+                WHEN o.completed_at IS NOT NULL AND o.sla_user_paid_at IS NOT NULL
+                THEN TIMESTAMPDIFF(SECOND, o.sla_user_paid_at, o.completed_at)
+            END AS close_seconds
+        FROM orders o
+        WHERE o.support_id = :sid
+        ORDER BY o.created_at DESC
+        LIMIT :lim OFFSET :off
+    """), {"sid": support_id, "lim": limit, "off": offset})
+
+    count_row = await db.execute(
+        text("SELECT COUNT(id) FROM orders WHERE support_id = :sid"), {"sid": support_id}
+    )
+    total = count_row.scalar() or 0
+
+    orders = []
+    for r in rows:
+        orders.append({
+            "id": r.id,
+            "dir": r.dir,
+            "coin": r.coin,
+            "sum_rub": float(r.sum_rub or 0),
+            "amount_coin": float(r.amount_coin or 0),
+            "status": r.status,
+            "created_at": r.created_at.isoformat() if r.created_at else None,
+            "requisite_setup_seconds": int(r.requisite_setup_seconds) if r.requisite_setup_seconds is not None else None,
+            "close_seconds": int(r.close_seconds) if r.close_seconds is not None else None,
+        })
+
+    return {"orders": orders, "total": total, "pages": -(-total // limit), "page": page}
 
 
 # ---------------------------------------------------------------------------

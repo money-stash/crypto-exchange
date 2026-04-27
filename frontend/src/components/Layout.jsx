@@ -158,7 +158,7 @@ const Layout = () => {
         {/* Navigation with Premium Styling */}
         <nav className="flex-1 px-2 py-2 space-y-0.5 overflow-y-auto">
           {navigation.map((item) => {
-            const isActive = location.pathname === item.href;
+            const isActive = location.pathname === item.href || location.pathname.startsWith(item.href + '/');
             const Icon = item.icon;
             const showChatsBadge = item.href === '/chats' && chatsUnreadCount > 0;
             const unreadLabel = chatsUnreadCount > 99 ? '99+' : String(chatsUnreadCount);
