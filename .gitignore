@@ -137,4 +137,4 @@ temp/
 
 # Docker
 docker-compose.override.yml
-venv/
+venv/python_backend/venv/
