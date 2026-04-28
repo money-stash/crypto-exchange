@@ -50,61 +50,102 @@ async def get_finance_stats(
 
     where = " AND ".join(where_parts)
 
-    # Общие итоги
-    totals_row = await db.execute(
-        text(f"""
-            SELECT
-                COUNT(*) AS orders_count,
-                COALESCE(SUM(o.sum_rub), 0) AS volume_rub,
-                COALESCE(SUM(o.operator_profit_rub), 0) AS profit_rub,
-                COALESCE(AVG(o.operator_profit_rub), 0) AS avg_profit_rub
-            FROM orders o
-            LEFT JOIN supports sp ON sp.id = o.support_id
-            WHERE {where}
-        """),
-        params,
-    )
-    totals = dict(totals_row.mappings().one())
+    # Общие итоги (с fallback если колонки миграции ещё не применены)
+    try:
+        totals_row = await db.execute(
+            text(f"""
+                SELECT
+                    COUNT(*) AS orders_count,
+                    COALESCE(SUM(o.sum_rub), 0) AS volume_rub,
+                    COALESCE(SUM(o.operator_profit_rub), 0) AS profit_rub,
+                    COALESCE(AVG(o.operator_profit_rub), 0) AS avg_profit_rub
+                FROM orders o
+                LEFT JOIN supports sp ON sp.id = o.support_id
+                WHERE {where}
+            """),
+            params,
+        )
+        totals = dict(totals_row.mappings().one())
+    except Exception:
+        totals_row = await db.execute(
+            text(f"""
+                SELECT COUNT(*) AS orders_count, COALESCE(SUM(o.sum_rub), 0) AS volume_rub,
+                       0 AS profit_rub, 0 AS avg_profit_rub
+                FROM orders o WHERE {where.replace('sp.operator_type = :op_type', '1=1')}
+            """),
+            {k: v for k, v in params.items() if k != "op_type"},
+        )
+        totals = dict(totals_row.mappings().one())
 
     # По операторам
-    op_rows = await db.execute(
-        text(f"""
-            SELECT
-                sp.id AS support_id,
-                sp.login,
-                sp.operator_type,
-                COUNT(*) AS orders_count,
-                COALESCE(SUM(o.sum_rub), 0) AS volume_rub,
-                COALESCE(SUM(o.operator_profit_rub), 0) AS profit_rub,
-                COUNT(DISTINCT o.shift_id) AS shifts_count
-            FROM orders o
-            LEFT JOIN supports sp ON sp.id = o.support_id
-            WHERE {where}
-            GROUP BY sp.id, sp.login, sp.operator_type
-            ORDER BY profit_rub DESC
-        """),
-        params,
-    )
-    by_operator = [dict(r._mapping) for r in op_rows]
+    try:
+        op_rows = await db.execute(
+            text(f"""
+                SELECT
+                    sp.id AS support_id,
+                    sp.login,
+                    sp.operator_type,
+                    COUNT(*) AS orders_count,
+                    COALESCE(SUM(o.sum_rub), 0) AS volume_rub,
+                    COALESCE(SUM(o.operator_profit_rub), 0) AS profit_rub,
+                    COUNT(DISTINCT o.shift_id) AS shifts_count
+                FROM orders o
+                LEFT JOIN supports sp ON sp.id = o.support_id
+                WHERE {where}
+                GROUP BY sp.id, sp.login, sp.operator_type
+                ORDER BY volume_rub DESC
+            """),
+            params,
+        )
+        by_operator = [dict(r._mapping) for r in op_rows]
+    except Exception:
+        try:
+            op_rows = await db.execute(
+                text(f"""
+                    SELECT sp.id AS support_id, sp.login, 'manual' AS operator_type,
+                           COUNT(*) AS orders_count, COALESCE(SUM(o.sum_rub), 0) AS volume_rub,
+                           0 AS profit_rub, 0 AS shifts_count
+                    FROM orders o
+                    LEFT JOIN supports sp ON sp.id = o.support_id
+                    WHERE {where}
+                    GROUP BY sp.id, sp.login
+                    ORDER BY volume_rub DESC
+                """),
+                {k: v for k, v in params.items() if k != "op_type"},
+            )
+            by_operator = [dict(r._mapping) for r in op_rows]
+        except Exception:
+            by_operator = []
 
     # График по дням
-    chart_rows = await db.execute(
-        text(f"""
-            SELECT
-                DATE(o.completed_at) AS date,
-                COUNT(*) AS orders_count,
-                COALESCE(SUM(o.sum_rub), 0) AS volume_rub,
-                COALESCE(SUM(o.operator_profit_rub), 0) AS profit_rub
-            FROM orders o
-            LEFT JOIN supports sp ON sp.id = o.support_id
-            WHERE {where}
-            GROUP BY DATE(o.completed_at)
-            ORDER BY date ASC
-        """),
-        params,
-    )
-    chart = [dict(r._mapping) for r in chart_rows]
-    # Convert date to string for JSON
+    try:
+        chart_rows = await db.execute(
+            text(f"""
+                SELECT
+                    DATE(o.completed_at) AS date,
+                    COUNT(*) AS orders_count,
+                    COALESCE(SUM(o.sum_rub), 0) AS volume_rub,
+                    COALESCE(SUM(o.operator_profit_rub), 0) AS profit_rub
+                FROM orders o
+                LEFT JOIN supports sp ON sp.id = o.support_id
+                WHERE {where}
+                GROUP BY DATE(o.completed_at)
+                ORDER BY date ASC
+            """),
+            params,
+        )
+        chart = [dict(r._mapping) for r in chart_rows]
+    except Exception:
+        chart_rows = await db.execute(
+            text(f"""
+                SELECT DATE(o.completed_at) AS date, COUNT(*) AS orders_count,
+                       COALESCE(SUM(o.sum_rub), 0) AS volume_rub, 0 AS profit_rub
+                FROM orders o WHERE {where}
+                GROUP BY DATE(o.completed_at) ORDER BY date ASC
+            """),
+            {k: v for k, v in params.items() if k != "op_type"},
+        )
+        chart = [dict(r._mapping) for r in chart_rows]
     for row in chart:
         if row.get("date"):
             row["date"] = str(row["date"])

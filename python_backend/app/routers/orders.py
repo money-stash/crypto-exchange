@@ -9,6 +9,7 @@ from app.database import get_db
 from app.middleware.auth import get_current_user, require_auth
 from app.models.support import Support
 import app.socket.socket_service as sio
+from bot.manager import bot_manager
 
 logger = logging.getLogger(__name__)
 
@@ -328,6 +329,21 @@ async def cancel_order(
         "newStatus": "CANCELLED",
         "order": updated_order,
     })
+
+    # Уведомить клиента в Telegram
+    bot_id = updated_order.get("bot_id")
+    tg_id = updated_order.get("tg_id")
+    unique_id = updated_order.get("unique_id") or order_id
+    if bot_id and tg_id:
+        reason_text = f"\n\nПричина: {cancel_reason}" if cancel_reason and cancel_reason != "Отменено оператором" else ""
+        await bot_manager.send_message(
+            int(bot_id),
+            int(tg_id),
+            f"❌ <b>Заявка #{unique_id} отменена.</b>{reason_text}\n\n"
+            f"Если у вас остались вопросы, обратитесь в поддержку.",
+            parse_mode="HTML",
+        )
+
     return {"success": True, "message": "Order cancelled", "orderDetails": updated_order}
 
 

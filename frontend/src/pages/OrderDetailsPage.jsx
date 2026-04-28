@@ -167,7 +167,7 @@ const OrderDetailsPage = () => {
   const hasOperatorCancelPermission = Number(user?.can_cancel_order ?? 0) === 1;
   const hasOperatorEditRequisitesPermission = Number(user?.can_edit_requisites ?? 0) === 1;
   const isOperatorBuyHidden = isOperatorRole && order?.dir === 'BUY' && order?.redacted_for_operator;
-  const canCompleteBuyOrder = ['MANAGER', 'SUPERADMIN', 'CASHIER'].includes(roleUpper);
+  const canCompleteBuyOrder = ['MANAGER', 'SUPERADMIN', 'CASHIER', 'OPERATOR'].includes(roleUpper);
   const hasExchangerRequisites = Boolean(
     order?.exch_req_id ||
     order?.exch_card_number ||

@@ -149,46 +149,57 @@ async def end_shift(
             "message": f"Смена заканчивается раньше времени. Штраф составит {penalty:,.2f} ₽",
         }
 
-    # Считаем итоги смены
-    stats_row = await db.execute(
-        text("""
-            SELECT
-                COUNT(*) AS orders_completed,
-                COALESCE(SUM(sum_rub), 0) AS total_volume_rub,
-                COALESCE(SUM(COALESCE(operator_profit_rub, 0)), 0) AS total_profit_rub
-            FROM orders
-            WHERE shift_id = :sid AND status = 'COMPLETED'
-        """),
-        {"sid": shift_id},
-    )
-    stats = dict(stats_row.mappings().one())
+    # Считаем итоги смены (с защитой от отсутствующих колонок)
+    try:
+        stats_row = await db.execute(
+            text("""
+                SELECT
+                    COUNT(*) AS orders_completed,
+                    COALESCE(SUM(sum_rub), 0) AS total_volume_rub,
+                    COALESCE(SUM(COALESCE(operator_profit_rub, 0)), 0) AS total_profit_rub
+                FROM orders
+                WHERE shift_id = :sid AND status = 'COMPLETED'
+            """),
+            {"sid": shift_id},
+        )
+        stats = dict(stats_row.mappings().one())
+    except Exception:
+        # Колонки shift_id / operator_profit_rub ещё не добавлены (миграция не применена)
+        stats = {"orders_completed": 0, "total_volume_rub": 0, "total_profit_rub": 0}
 
     remaining_hours = max(0, (planned_min - elapsed_min) / 60)
     penalty = round(remaining_hours * penalty_per_hour, 2) if is_early else 0
 
-    await db.execute(
-        text("""
-            UPDATE operator_shifts SET
-                status = 'closed',
-                ended_at = NOW(),
-                actual_duration_min = :elapsed_min,
-                early_close_penalty = :penalty,
-                orders_completed = :orders_completed,
-                total_volume_rub = :volume,
-                total_profit_rub = :profit,
-                notes = :notes
-            WHERE id = :id
-        """),
-        {
-            "id": shift_id,
-            "elapsed_min": elapsed_min,
-            "penalty": penalty,
-            "orders_completed": stats["orders_completed"],
-            "volume": stats["total_volume_rub"],
-            "profit": stats["total_profit_rub"],
-            "notes": (body.notes if body else None),
-        },
-    )
+    # Пробуем обновить с полным набором колонок, при ошибке — минимальный UPDATE
+    try:
+        await db.execute(
+            text("""
+                UPDATE operator_shifts SET
+                    status = 'closed',
+                    ended_at = NOW(),
+                    actual_duration_min = :elapsed_min,
+                    early_close_penalty = :penalty,
+                    orders_completed = :orders_completed,
+                    total_volume_rub = :volume,
+                    total_profit_rub = :profit,
+                    notes = :notes
+                WHERE id = :id
+            """),
+            {
+                "id": shift_id,
+                "elapsed_min": elapsed_min,
+                "penalty": penalty,
+                "orders_completed": stats["orders_completed"],
+                "volume": stats["total_volume_rub"],
+                "profit": stats["total_profit_rub"],
+                "notes": (body.notes if body else None),
+            },
+        )
+    except Exception:
+        await db.execute(
+            text("UPDATE operator_shifts SET status = 'closed', ended_at = NOW() WHERE id = :id"),
+            {"id": shift_id},
+        )
 
     updated = await db.execute(text("SELECT * FROM operator_shifts WHERE id = :id"), {"id": shift_id})
     updated_shift = dict(updated.mappings().one())

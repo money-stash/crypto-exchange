@@ -472,7 +472,7 @@ const Mailings = () => {
             </svg>
           </ActionButton>
           
-          {mailing.status === 'active' && (
+          {mailing.status === 'active' && !(mailing.total_count > 0 && (mailing.send_count || 0) >= mailing.total_count) && (
             <ActionButton
               onClick={() => handleCancel(mailing)}
               variant="warning"
@@ -485,7 +485,7 @@ const Mailings = () => {
             </ActionButton>
           )}
 
-          {mailing.status !== 'active' && (
+          {(mailing.status !== 'active' || (mailing.total_count > 0 && (mailing.send_count || 0) >= mailing.total_count)) && (
             <ActionButton
               onClick={() => handleDelete(mailing)}
               variant="danger"
@@ -634,7 +634,7 @@ const Mailings = () => {
                 </svg>
               </ActionButton>
               
-              {mailing.status === 'active' && (
+              {mailing.status === 'active' && !(mailing.total_count > 0 && (mailing.send_count || 0) >= mailing.total_count) && (
                 <ActionButton
                   onClick={() => handleCancel(mailing)}
                   variant="warning"
@@ -647,7 +647,7 @@ const Mailings = () => {
                 </ActionButton>
               )}
 
-              {mailing.status !== 'active' && (
+              {(mailing.status !== 'active' || (mailing.total_count > 0 && (mailing.send_count || 0) >= mailing.total_count)) && (
                 <ActionButton
                   onClick={() => handleDelete(mailing)}
                   variant="danger"
@@ -1173,7 +1173,7 @@ const Mailings = () => {
             )}        
             
             <div className="flex justify-end gap-3 pt-4 border-t border-gray-200/50 dark:border-gray-600/50">
-              {selectedMailing.status === 'active' && (
+              {selectedMailing.status === 'active' && !(selectedMailing.total_count > 0 && (selectedMailing.send_count || 0) >= selectedMailing.total_count) && (
                 <ActionButton
                   onClick={() => {
                     setShowDetailsModal(false);

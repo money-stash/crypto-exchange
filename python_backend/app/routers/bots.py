@@ -20,7 +20,7 @@ require_admin_ex = require_roles("SUPERADMIN", "EX_ADMIN")
 
 class BotCreate(BaseModel):
     name: str
-    identifier: str
+    identifier: Optional[str] = None
     token: str
     description: Optional[str] = None
     exchange_chat_link: Optional[str] = None
@@ -293,15 +293,23 @@ async def create_bot(
     current_user: Support = Depends(require_admin_ex),
     db: AsyncSession = Depends(get_db),
 ):
-    dup_id = await db.execute(select(Bot).where(Bot.identifier == body.identifier))
+    import re, secrets
+    # Автогенерация идентификатора из имени если не передан
+    if body.identifier:
+        identifier = body.identifier
+    else:
+        slug = re.sub(r'[^a-z0-9]+', '_', body.name.lower()).strip('_') or 'bot'
+        identifier = f"{slug}_{secrets.token_hex(3)}"
+
+    dup_id = await db.execute(select(Bot).where(Bot.identifier == identifier))
     if dup_id.scalar_one_or_none():
-        raise HTTPException(400, "Bot identifier already exists")
+        identifier = f"{identifier}_{secrets.token_hex(3)}"
     dup_tok = await db.execute(select(Bot).where(Bot.token == body.token))
     if dup_tok.scalar_one_or_none():
         raise HTTPException(400, "Bot token already exists")
 
     bot = Bot(
-        name=body.name, identifier=body.identifier, token=body.token,
+        name=body.name, identifier=identifier, token=body.token,
         description=body.description, is_active=body.is_active,
         exchange_chat_link=body.exchange_chat_link,
         reviews_chat_link=body.reviews_chat_link,
@@ -744,6 +752,31 @@ async def get_bot_fee_tiers(
              "buy_fee": float(t.buy_fee), "sell_fee": float(t.sell_fee)} for t in tiers]
 
 
+@router.put("/{bot_id}/fee-tiers/bulk")
+async def bulk_update_fee_tiers(
+    bot_id: int,
+    body: BulkFeeTiersUpdate,
+    current_user: Support = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    await _check_bot_access(bot_id, current_user, db, write=True)
+
+    # Удаляем все тиры для монеты и пересоздаём
+    await db.execute(
+        text("DELETE FROM bot_fee_tiers WHERE bot_id = :bot_id AND coin = :coin"),
+        {"bot_id": bot_id, "coin": body.coin.upper()},
+    )
+    new_tiers = []
+    for t in body.tiers:
+        tier = BotFeeTier(bot_id=bot_id, coin=body.coin.upper(),
+                          min_amount=t.min_amount, max_amount=t.max_amount,
+                          buy_fee=t.buy_fee, sell_fee=t.sell_fee)
+        db.add(tier)
+        new_tiers.append(tier)
+    await db.flush()
+    return {"success": True, "message": f"Сохранено {len(new_tiers)} диапазонов для {body.coin}"}
+
+
 @router.post("/{bot_id}/fee-tiers")
 @router.put("/{bot_id}/fee-tiers/{tier_id}")
 async def create_or_update_fee_tier(
@@ -777,31 +810,6 @@ async def create_or_update_fee_tier(
     db.add(tier)
     await db.flush()
     return {"id": tier.id, "success": True}
-
-
-@router.put("/{bot_id}/fee-tiers/bulk")
-async def bulk_update_fee_tiers(
-    bot_id: int,
-    body: BulkFeeTiersUpdate,
-    current_user: Support = Depends(get_current_user),
-    db: AsyncSession = Depends(get_db),
-):
-    await _check_bot_access(bot_id, current_user, db, write=True)
-
-    # Удаляем все тиры для монеты и пересоздаём
-    await db.execute(
-        text("DELETE FROM bot_fee_tiers WHERE bot_id = :bot_id AND coin = :coin"),
-        {"bot_id": bot_id, "coin": body.coin.upper()},
-    )
-    new_tiers = []
-    for t in body.tiers:
-        tier = BotFeeTier(bot_id=bot_id, coin=body.coin.upper(),
-                          min_amount=t.min_amount, max_amount=t.max_amount,
-                          buy_fee=t.buy_fee, sell_fee=t.sell_fee)
-        db.add(tier)
-        new_tiers.append(tier)
-    await db.flush()
-    return {"success": True, "message": f"Сохранено {len(new_tiers)} диапазонов для {body.coin}"}
 
 
 @router.delete("/{bot_id}/fee-tiers/{tier_id}")

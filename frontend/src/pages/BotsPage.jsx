@@ -28,7 +28,6 @@ const BotsPage = () => {
 
   const [formData, setFormData] = useState({
     name: '',
-    identifier: '',
     token: '',
     description: '',
     exchange_chat_link: '',
@@ -175,7 +174,6 @@ const BotsPage = () => {
     setEditingBot(bot);
     setFormData({
       name: bot.name,
-      identifier: bot.identifier,
       token: bot.token,
       description: bot.description || '',
       exchange_chat_link: bot.exchange_chat_link || '',
@@ -189,7 +187,6 @@ const BotsPage = () => {
   const resetForm = () => {
     setFormData({
       name: '',
-      identifier: '',
       token: '',
       description: '',
       exchange_chat_link: '',
@@ -550,28 +547,6 @@ const BotsPage = () => {
               placeholder="Название бота"
               required
             />
-          </div>
-
-          {/* ид бота */}
-          <div className="relative">
-            <label className="flex items-center gap-2 text-sm font-semibold text-gray-700 dark:text-gray-300 mb-3">
-              <Hash className="w-4 h-4 text-blue-500" />
-              Идентификатор
-            </label>
-            <input
-              type="text"
-              value={formData.identifier}
-              onChange={(e) => setFormData({...formData, identifier: e.target.value})}
-              className="block w-full px-4 py-3 bg-white dark:bg-gray-800 border-2 border-gray-200 dark:border-gray-700 rounded-xl text-gray-900 dark:text-gray-200 focus:ring-2 focus:ring-blue-500/50 focus:border-blue-500 dark:focus:border-blue-500 transition-all placeholder-gray-400 dark:placeholder-gray-500 font-medium"
-              placeholder="bot_identifier"
-              pattern="[a-z0-9_\-]+"
-              title="Только строчные буквы, цифры, дефисы и подчеркивания"
-              required
-            />
-            <p className="mt-2 text-xs text-gray-500 dark:text-gray-400 flex items-center gap-1.5">
-              <AlertCircle className="w-3.5 h-3.5" />
-              Только строчные буквы, цифры, дефисы и подчеркивания
-            </p>
           </div>
 
           {/* токен бота */}

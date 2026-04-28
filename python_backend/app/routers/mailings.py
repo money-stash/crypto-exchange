@@ -1,3 +1,4 @@
+import asyncio
 import json
 import os
 import uuid
@@ -197,36 +198,74 @@ async def create_raffle_mailing(
     db: AsyncSession = Depends(get_db),
     current_user: Support = Depends(require_roles("SUPERADMIN", "EX_ADMIN")),
 ):
-    # Parse recipients text
+    from app.services.mailing_service import (
+        parse_raffle_recipients, resolve_raffle_recipient, send_message_to_user
+    )
+
     raffle_name = str(body.get("raffle_name") or "Розыгрыш").strip() or "Розыгрыш"
     recipients_text = str(body.get("recipients_text") or "")
-    lines = recipients_text.splitlines()
+
+    accessible = await _get_bot_ids_for_user(db, current_user.role, current_user.id)
+    req_bot_id = body.get("bot_id")
+
+    if current_user.role == "EX_ADMIN":
+        if not accessible:
+            raise HTTPException(400, "No bot found for this user")
+        if req_bot_id and int(req_bot_id) not in accessible:
+            raise HTTPException(403, "Access denied for selected bot")
+        bot_id = int(req_bot_id) if req_bot_id else accessible[0]
+    else:
+        bot_id = int(req_bot_id) if req_bot_id else 0
+
+    parsed = parse_raffle_recipients(recipients_text)
+    if not parsed["recipients"]:
+        raise HTTPException(400, "Recipients list is empty or invalid")
 
     results = []
     sent_count = 0
     failed_count = 0
-    raffle_number = 1
 
-    for i, line in enumerate(lines):
-        raw = line.strip()
-        if not raw:
-            continue
-        token = raw.split()[0].strip("@").lower()
-        if not token:
-            results.append({"line": i + 1, "input": raw, "status": "failed", "reason": "Empty identifier"})
+    for skipped in parsed["skipped"]:
+        results.append({"line": skipped["line"], "input": skipped["raw"],
+                        "status": "failed", "reason": skipped["reason"]})
+        failed_count += 1
+
+    for recipient in parsed["recipients"]:
+        try:
+            resolved = await resolve_raffle_recipient(recipient, bot_id)
+            if not resolved:
+                results.append({"line": recipient["line"], "input": recipient["raw"],
+                                "status": "failed", "reason": "User not found"})
+                failed_count += 1
+                continue
+
+            target_bot_id = resolved["bot_id"] or bot_id or 0
+            message = f"Ваш номер в розыгрыше {raffle_name}: {recipient['raffle_number']}"
+            sent = await send_message_to_user(target_bot_id, int(resolved["tg_id"]), message, None)
+
+            if sent:
+                results.append({
+                    "line": recipient["line"], "input": recipient["raw"], "status": "sent",
+                    "raffle_number": recipient["raffle_number"], "tg_id": resolved["tg_id"],
+                    "username": f"@{resolved['username']}" if resolved.get("username") else None,
+                })
+                sent_count += 1
+            else:
+                results.append({"line": recipient["line"], "input": recipient["raw"],
+                                "status": "failed", "reason": "Telegram rejected the message"})
+                failed_count += 1
+        except Exception as e:
+            results.append({"line": recipient["line"], "input": recipient["raw"],
+                            "status": "failed", "reason": "Send error"})
             failed_count += 1
-            continue
-
-        # TODO: integrate with BotManager to actually send messages
-        results.append({"line": i + 1, "input": raw, "status": "pending",
-                        "raffle_number": raffle_number, "reason": "BotManager not yet available"})
-        raffle_number += 1
 
     return {
-        "message": "Raffle mailing queued (BotManager pending)",
+        "message": "Raffle mailing processed",
         "data": {
             "raffle_name": raffle_name,
-            "total_lines": len(lines),
+            "bot_id": bot_id,
+            "total_lines": parsed["total_lines"],
+            "valid_targets": len(parsed["recipients"]),
             "sent_count": sent_count,
             "failed_count": failed_count,
             "results": results,
@@ -294,7 +333,9 @@ async def create_mailing(
         except Exception:
             m["attachments"] = []
 
-    # TODO: trigger mailing_service.start_mailing(mailing_id) when BotManager is ready
+    from app.services.mailing_service import mailing_service
+    asyncio.create_task(mailing_service.start_mailing(mailing_id))
+
     return m
 
 

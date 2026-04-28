@@ -1,6 +1,7 @@
 import React, { useState, useEffect, useCallback } from 'react';
 import { toast } from 'react-toastify';
 import { cashiersApi } from '../services/api';
+import { Eye, EyeOff } from 'lucide-react';
 
 const initialForm = { login: '', password: '', commission_percent: '0' };
 
@@ -18,6 +19,7 @@ export default function CashiersManagementPage() {
   const [showCreate, setShowCreate] = useState(false);
   const [createForm, setCreateForm] = useState(initialForm);
   const [saving, setSaving] = useState(false);
+  const [showCreatePassword, setShowCreatePassword] = useState(false);
 
   const [expandedId, setExpandedId] = useState(null);
   const [expandedCards, setExpandedCards] = useState([]);
@@ -443,26 +445,49 @@ export default function CashiersManagementPage() {
           <div className="bg-white dark:bg-gray-800 rounded-2xl shadow-xl w-full max-w-sm mx-4 p-6">
             <h2 className="text-lg font-bold text-gray-900 dark:text-white mb-4">Новый кассир</h2>
             <div className="space-y-3">
-              {[
-                { label: 'Логин *', key: 'login', type: 'text', placeholder: 'cashier1' },
-                { label: 'Пароль *', key: 'password', type: 'password', placeholder: '••••••' },
-                { label: 'Комиссия (%)', key: 'commission_percent', type: 'number', placeholder: '0' },
-              ].map(f => (
-                <div key={f.key}>
-                  <label className="block text-xs font-medium text-gray-600 dark:text-gray-400 mb-1">{f.label}</label>
+              <div>
+                <label className="block text-xs font-medium text-gray-600 dark:text-gray-400 mb-1">Логин *</label>
+                <input
+                  type="text"
+                  value={createForm.login}
+                  onChange={e => setCreateForm(p => ({ ...p, login: e.target.value }))}
+                  placeholder="cashier1"
+                  className="w-full px-3 py-2 text-sm border border-gray-200 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-700 text-gray-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-blue-500"
+                />
+              </div>
+              <div>
+                <label className="block text-xs font-medium text-gray-600 dark:text-gray-400 mb-1">Пароль *</label>
+                <div className="relative">
                   <input
-                    type={f.type}
-                    value={createForm[f.key]}
-                    onChange={e => setCreateForm(p => ({ ...p, [f.key]: e.target.value }))}
-                    placeholder={f.placeholder}
-                    className="w-full px-3 py-2 text-sm border border-gray-200 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-700 text-gray-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-blue-500"
+                    type={showCreatePassword ? 'text' : 'password'}
+                    value={createForm.password}
+                    onChange={e => setCreateForm(p => ({ ...p, password: e.target.value }))}
+                    placeholder="••••••"
+                    className="w-full px-3 py-2 pr-10 text-sm border border-gray-200 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-700 text-gray-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-blue-500"
                   />
+                  <button
+                    type="button"
+                    onClick={() => setShowCreatePassword(p => !p)}
+                    className="absolute right-2 top-1/2 -translate-y-1/2 text-gray-400 hover:text-gray-600 dark:hover:text-gray-300"
+                  >
+                    {showCreatePassword ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
+                  </button>
                 </div>
-              ))}
+              </div>
+              <div>
+                <label className="block text-xs font-medium text-gray-600 dark:text-gray-400 mb-1">Комиссия (%)</label>
+                <input
+                  type="number"
+                  value={createForm.commission_percent}
+                  onChange={e => setCreateForm(p => ({ ...p, commission_percent: e.target.value }))}
+                  placeholder="0"
+                  className="w-full px-3 py-2 text-sm border border-gray-200 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-700 text-gray-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-blue-500"
+                />
+              </div>
             </div>
             <div className="flex gap-3 mt-5">
               <button
-                onClick={() => setShowCreate(false)}
+                onClick={() => { setShowCreate(false); setShowCreatePassword(false); }}
                 className="flex-1 py-2 border border-gray-200 dark:border-gray-600 rounded-lg text-sm text-gray-600 dark:text-gray-300 hover:bg-gray-50 dark:hover:bg-gray-700 transition-colors"
               >
                 Отмена
