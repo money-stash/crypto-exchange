@@ -207,9 +207,46 @@ async def get_user_by_id(
         WHERE ub.user_id = :uid
     """), {"uid": uid})
 
+    user_bots_list = [dict(r._mapping) for r in user_bots.fetchall()]
+
+    # referral stats — aggregate across all user_bots (mirrors Node.js getUserById)
+    ref_stats = await db.execute(text("""
+        SELECT
+            COUNT(DISTINCT ub_inv.id)                                              AS total_referrals,
+            COUNT(DISTINCT CASE WHEN os2.orders_count > 0 THEN ub_inv.id END)     AS active_referrals,
+            COALESCE(SUM(os2.orders_count), 0)                                     AS referral_orders,
+            COALESCE(SUM(os2.total_volume), 0)                                     AS referral_volume
+        FROM user_bots ub_me
+        JOIN user_bots ub_inv ON ub_inv.invited_by = ub_me.id
+        LEFT JOIN (
+            SELECT user_bot_id, COUNT(*) AS orders_count, COALESCE(SUM(sum_rub),0) AS total_volume
+            FROM orders WHERE status='COMPLETED' GROUP BY user_bot_id
+        ) os2 ON ub_inv.id = os2.user_bot_id
+        WHERE ub_me.user_id = :uid
+    """), {"uid": uid})
+    rs = ref_stats.fetchone()
+
+    bonus_stats = await db.execute(text("""
+        SELECT
+            COUNT(*)                   AS total_bonuses,
+            COUNT(DISTINCT order_id)   AS bonus_transactions,
+            MAX(created_at)            AS last_bonus_date
+        FROM referral_bonuses rb
+        JOIN user_bots ub ON rb.referrer_userbot_id = ub.id
+        WHERE ub.user_id = :uid
+    """), {"uid": uid})
+    bs = bonus_stats.fetchone()
+
     user_data.update(dict(os._mapping))
     user_data["recent_orders"] = [dict(r._mapping) for r in recent.fetchall()]
-    user_data["user_bots"] = [dict(r._mapping) for r in user_bots.fetchall()]
+    user_data["user_bots"] = user_bots_list
+    user_data["total_referrals"] = int(rs.total_referrals or 0)
+    user_data["active_referrals"] = int(rs.active_referrals or 0)
+    user_data["referral_orders"] = int(rs.referral_orders or 0)
+    user_data["referral_volume"] = float(rs.referral_volume or 0)
+    user_data["total_bonuses"] = float(bs.total_bonuses or 0)
+    user_data["bonus_transactions"] = int(bs.bonus_transactions or 0)
+    user_data["last_bonus_date"] = bs.last_bonus_date
     return user_data
 
 

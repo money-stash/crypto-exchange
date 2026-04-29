@@ -188,11 +188,6 @@ async def cancel_withdrawal(
             raise HTTPException(403, "Access denied")
 
     await db.execute(text("UPDATE referrals_withdraw SET status='CANCELLED' WHERE id=:id"), {"id": withdrawal_id})
-    # Return bonus to balance
-    await db.execute(text("""
-        UPDATE user_bots SET referral_bonus_balance = referral_bonus_balance + :amount
-        WHERE id = :ubid
-    """), {"amount": w.amount_rub, "ubid": w.userbot_id})
     await db.commit()
     # TODO: send Telegram notification via BotManager when available
     return {"success": True, "message": "Withdrawal cancelled"}
