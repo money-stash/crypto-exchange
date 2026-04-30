@@ -247,3 +247,55 @@ async def get_crypto_wallet_balance(
     except httpx.HTTPError as e:
         logger.error(f"Ошибка получения баланса {coin}: {e}")
         raise HTTPException(502, "Не удалось получить баланс от blockstream.info")
+
+
+# ── Cashier deposit wallet addresses ─────────────────────────────────────────
+
+CASHIER_DEPOSIT_COINS = ["BTC", "LTC", "USDT"]
+CASHIER_DEPOSIT_KEY = "cashier_deposit_wallet_{coin}"
+
+
+class CashierDepositWalletRequest(BaseModel):
+    address: str
+
+
+@router.get("/cashier-deposit-wallets")
+async def get_cashier_deposit_wallets(
+    db: AsyncSession = Depends(get_db),
+    current_user: Support = Depends(require_roles("SUPERADMIN")),
+):
+    wallets = {}
+    for coin in CASHIER_DEPOSIT_COINS:
+        addr = await _get_setting(db, CASHIER_DEPOSIT_KEY.format(coin=coin))
+        wallets[coin] = addr or None
+    return {"wallets": wallets}
+
+
+@router.put("/cashier-deposit-wallets/{coin}")
+async def set_cashier_deposit_wallet(
+    coin: str,
+    body: CashierDepositWalletRequest,
+    db: AsyncSession = Depends(get_db),
+    current_user: Support = Depends(require_roles("SUPERADMIN")),
+):
+    coin = coin.upper()
+    if coin not in CASHIER_DEPOSIT_COINS:
+        raise HTTPException(400, f"Монета {coin} не поддерживается. Допустимые: {', '.join(CASHIER_DEPOSIT_COINS)}")
+    address = (body.address or "").strip()
+    await _set_setting(db, CASHIER_DEPOSIT_KEY.format(coin=coin), address)
+    await db.commit()
+    return {"success": True, "coin": coin, "address": address or None}
+
+
+@router.delete("/cashier-deposit-wallets/{coin}")
+async def delete_cashier_deposit_wallet(
+    coin: str,
+    db: AsyncSession = Depends(get_db),
+    current_user: Support = Depends(require_roles("SUPERADMIN")),
+):
+    coin = coin.upper()
+    if coin not in CASHIER_DEPOSIT_COINS:
+        raise HTTPException(400, f"Монета {coin} не поддерживается")
+    await _set_setting(db, CASHIER_DEPOSIT_KEY.format(coin=coin), "")
+    await db.commit()
+    return {"success": True, "coin": coin}

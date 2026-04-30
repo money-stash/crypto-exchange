@@ -55,6 +55,8 @@ CREATE TABLE IF NOT EXISTS supports (
     deposit             DECIMAL(14,2) DEFAULT 0,
     deposit_paid        DECIMAL(14,2) DEFAULT 0,
     deposit_work        DECIMAL(14,2) DEFAULT 0,
+    tg_id               BIGINT NULL,               -- Telegram user ID (cashier notifications)
+    team_id             BIGINT NULL,               -- FK cashier_teams.id
     created_at          DATETIME DEFAULT NOW()
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
 
@@ -436,7 +438,20 @@ CREATE TABLE IF NOT EXISTS system_settings (
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
 
 -- ─────────────────────────────────────────────
---  25. cashier_cards
+--  25. cashier_teams
+-- ─────────────────────────────────────────────
+CREATE TABLE IF NOT EXISTS cashier_teams (
+    id          BIGINT AUTO_INCREMENT PRIMARY KEY,
+    name        VARCHAR(128) NOT NULL,
+    bot_token   VARCHAR(255),
+    deposit             DECIMAL(14,2) DEFAULT 0,
+    deposit_work        DECIMAL(14,2) DEFAULT 0,
+    deposit_paid        DECIMAL(14,2) DEFAULT 0,
+    created_at  DATETIME DEFAULT NOW()
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+
+-- ─────────────────────────────────────────────
+--  26. cashier_cards
 -- ─────────────────────────────────────────────
 CREATE TABLE IF NOT EXISTS cashier_cards (
     id                     BIGINT AUTO_INCREMENT PRIMARY KEY,
@@ -458,7 +473,20 @@ CREATE TABLE IF NOT EXISTS cashier_cards (
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
 
 -- ─────────────────────────────────────────────
---  26. cashier_deposits
+--  27. cashier_members  (team members per cashier account)
+-- ─────────────────────────────────────────────
+CREATE TABLE IF NOT EXISTS cashier_members (
+    id          BIGINT AUTO_INCREMENT PRIMARY KEY,
+    cashier_id  BIGINT NOT NULL,
+    tg_id       BIGINT NOT NULL,
+    username    VARCHAR(128),
+    joined_at   DATETIME DEFAULT NOW(),
+    UNIQUE KEY uq_cashier_tg (cashier_id, tg_id),
+    INDEX idx_cashier_id (cashier_id)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+
+-- ─────────────────────────────────────────────
+--  28. cashier_deposits
 -- ─────────────────────────────────────────────
 CREATE TABLE IF NOT EXISTS cashier_deposits (
     id            BIGINT AUTO_INCREMENT PRIMARY KEY,
@@ -582,26 +610,77 @@ INSERT IGNORE INTO rates (coin, rate_rub) VALUES
 """
 
 
+# Columns to add if missing: (table, column, definition)
+MIGRATIONS = [
+    ("supports", "team_id",              "BIGINT NULL"),
+    ("supports", "tg_id",                "BIGINT NULL"),
+    ("supports", "shift_duration_min",   "INT DEFAULT 480"),
+    ("supports", "penalty_per_hour",     "DECIMAL(10,2) DEFAULT 0"),
+    ("supports", "deposit",              "DECIMAL(14,2) DEFAULT 0"),
+    ("supports", "deposit_paid",         "DECIMAL(14,2) DEFAULT 0"),
+    ("supports", "deposit_work",         "DECIMAL(14,2) DEFAULT 0"),
+    ("orders",   "cashier_card_id",      "BIGINT"),
+    ("orders",   "user_bot_id",          "INT"),
+    ("orders",   "operator_received_usdt", "DECIMAL(20,8)"),
+    ("orders",   "operator_rate_rub",    "DECIMAL(20,8)"),
+    ("orders",   "operator_profit_rub",  "DECIMAL(14,2)"),
+    ("orders",   "shift_id",             "BIGINT"),
+    ("orders",   "complaint_count",      "INT DEFAULT 0"),
+    ("orders",   "ref_percent",          "DECIMAL(5,4) DEFAULT 0"),
+    ("orders",   "user_discount",        "DECIMAL(5,4) DEFAULT 0"),
+    ("operator_manager_messages", "order_id",         "BIGINT"),
+    ("operator_manager_messages", "order_unique_id",  "INT"),
+    ("operator_manager_messages", "order_sum_rub",    "DECIMAL(20,2)"),
+    ("cashier_teams", "deposit",                      "DECIMAL(14,2) DEFAULT 0"),
+    ("cashier_teams", "deposit_work",                 "DECIMAL(14,2) DEFAULT 0"),
+    ("cashier_teams", "deposit_paid",                 "DECIMAL(14,2) DEFAULT 0"),
+]
+
+
+async def _run_migrations(conn) -> None:
+    for table, column, definition in MIGRATIONS:
+        # Check if column exists
+        result = await conn.execute(
+            text("SELECT COUNT(*) FROM information_schema.COLUMNS "
+                 "WHERE TABLE_SCHEMA = DATABASE() "
+                 "AND TABLE_NAME = :t AND COLUMN_NAME = :c"),
+            {"t": table, "c": column},
+        )
+        exists = result.scalar()
+        if not exists:
+            try:
+                await conn.execute(
+                    text(f"ALTER TABLE `{table}` ADD COLUMN `{column}` {definition}")
+                )
+                log.info(f"MIGRATE  ALTER TABLE {table} ADD COLUMN {column}")
+            except Exception as e:
+                log.error(f"MIGRATE FAIL — {table}.{column}: {e}")
+                raise
+
+
 async def main() -> None:
     engine = create_async_engine(settings.DATABASE_URL, echo=False)
 
     statements = [s.strip() for s in SQL.split(";") if s.strip()]
 
     async with engine.begin() as conn:
+        # 1. Create missing tables
         for stmt in statements:
             if not stmt:
                 continue
             try:
                 await conn.execute(text(stmt))
-                # Extract table name for logging
                 first_line = stmt.split("\n")[0].strip()
                 log.info(f"OK  {first_line[:80]}")
             except Exception as e:
                 log.error(f"FAIL — {e}\n  SQL: {stmt[:120]}")
                 raise
 
+        # 2. Add missing columns to existing tables
+        await _run_migrations(conn)
+
     await engine.dispose()
-    log.info("\n✅  Все таблицы созданы успешно.")
+    log.info("\n✅  База данных обновлена успешно.")
 
 
 if __name__ == "__main__":

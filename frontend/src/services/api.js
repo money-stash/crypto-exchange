@@ -89,6 +89,10 @@ export const settingsApi = {
   setCryptoWallet: (coin, mnemonic) => api.put(`/settings/crypto-wallets/${coin}`, { mnemonic }),
   toggleCryptoWallet: (coin, is_active) => api.patch(`/settings/crypto-wallets/${coin}/toggle`, { is_active }),
   deleteCryptoWallet: (coin) => api.delete(`/settings/crypto-wallets/${coin}`),
+  // Cashier deposit wallets (plain addresses, no mnemonic)
+  getCashierDepositWallets: () => api.get('/settings/cashier-deposit-wallets'),
+  setCashierDepositWallet: (coin, address) => api.put(`/settings/cashier-deposit-wallets/${coin}`, { address }),
+  deleteCashierDepositWallet: (coin) => api.delete(`/settings/cashier-deposit-wallets/${coin}`),
 };
 
 // апи заказов
@@ -322,6 +326,25 @@ export const cashiersApi = {
   // Cashier deposit (admin)
   getCashierDeposit: (id) => api.get(`/cashiers/${id}/deposit`),
   adjustCashierDeposit: (id, data) => api.post(`/cashiers/${id}/deposit/adjust`, data),
+
+  // Teams
+  listTeams: () => api.get('/cashiers/teams'),
+  createTeam: (data) => api.post('/cashiers/teams', data),
+  updateTeam: (id, data) => api.put(`/cashiers/teams/${id}`, data),
+  deleteTeam: (id) => api.delete(`/cashiers/teams/${id}`),
+  getTeamMembers: (id) => api.get(`/cashiers/teams/${id}/members`),
+
+  // Admin — chat with cashiers
+  listCashierChats: () => api.get('/cashiers/chats'),
+  getCashierChat: (cashierId, params) => api.get(`/cashiers/${cashierId}/chat`, { params }),
+  sendToCashier: (cashierId, message) => api.post(`/cashiers/${cashierId}/chat`, { message }),
+  markCashierChatRead: (cashierId) => api.post(`/cashiers/${cashierId}/chat/read`),
+
+  // Cashier self — chat with manager
+  getMyChat: (params) => api.get('/cashiers/me/chat', { params }),
+  getMyChatUnread: () => api.get('/cashiers/me/chat/unread'),
+  sendToManager: (message) => api.post('/cashiers/me/chat', { message }),
+  markMyChatRead: () => api.post('/cashiers/me/chat/read'),
 };
 
 export default api;

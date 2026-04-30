@@ -324,6 +324,16 @@ async def handle_user_sent_crypto(callback: CallbackQuery, state, bot_config: di
     except Exception as e:
         logger.warning(f"[BOT] Failed to emit status change for order {order_id}: {e}")
 
+    # Notify cashier if this order is assigned to a cashier card
+    try:
+        cashier_support_id = updated_order.get("support_id")
+        cashier_card_id = updated_order.get("cashier_card_id")
+        if cashier_card_id and cashier_support_id:
+            from app.services.cashier_notify import notify_payment_received
+            await notify_payment_received(cashier_support_id, updated_order)
+    except Exception as e:
+        logger.warning(f"[BOT] Failed to notify cashier for order {order_id}: {e}")
+
     await callback.message.edit_text(
         f"✅ <b>Оплата отмечена!</b>\n\n"
         f"Заявка #{order.unique_id} ожидает подтверждения оператора.\n"

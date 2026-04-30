@@ -35,7 +35,8 @@ require_cashier_or_admin = require_roles("CASHIER", "SUPERADMIN")
 class CashierCreateRequest(BaseModel):
     login: str
     password: str
-    commission_percent: float = 0.0  # % of volume the cashier keeps
+    commission_percent: float = 0.0
+    team_id: Optional[int] = None
 
 
 class CashierUpdateRequest(BaseModel):
@@ -43,6 +44,7 @@ class CashierUpdateRequest(BaseModel):
     password: Optional[str] = None
     commission_percent: Optional[float] = None
     is_active: Optional[bool] = None
+    team_id: Optional[int] = None
 
 
 class CardCreateRequest(BaseModel):
@@ -103,7 +105,7 @@ async def get_volume_summary(
             COALESCE(SUM(cc.total_volume_limit), 0) AS total_volume_limit,
             COALESCE(SUM(cc.current_volume), 0)     AS current_volume,
             COUNT(cc.id)                             AS card_count,
-            SUM(CASE WHEN cc.is_active = 1 THEN 1 ELSE 0 END) AS active_cards
+            COALESCE(SUM(CASE WHEN cc.is_active = 1 THEN 1 ELSE 0 END), 0) AS active_cards
         FROM supports s
         LEFT JOIN cashier_cards cc ON cc.cashier_id = s.id
         WHERE s.role = 'CASHIER'
@@ -171,14 +173,15 @@ async def list_cashiers(
     rows = await db.execute(text(f"""
         SELECT
             s.id, s.login, s.is_active, s.rate_percent AS commission_percent, s.created_at,
+            s.team_id,
             COALESCE(s.deposit, 0)      AS deposit,
             COALESCE(s.deposit_work, 0) AS deposit_work,
             COALESCE(s.deposit_paid, 0) AS deposit_paid,
             COALESCE(SUM(cc.total_volume_limit), 0) AS total_volume_limit,
             COALESCE(SUM(cc.current_volume), 0)     AS current_volume,
             COUNT(cc.id)                             AS card_count,
-            SUM(CASE WHEN cc.is_active = 1 THEN 1 ELSE 0 END) AS active_cards,
-            SUM(CASE WHEN cc.limit_reached_notified = 1 THEN 1 ELSE 0 END) AS cards_at_limit
+            COALESCE(SUM(CASE WHEN cc.is_active = 1 THEN 1 ELSE 0 END), 0) AS active_cards,
+            COALESCE(SUM(CASE WHEN cc.limit_reached_notified = 1 THEN 1 ELSE 0 END), 0) AS cards_at_limit
         FROM supports s
         LEFT JOIN cashier_cards cc ON cc.cashier_id = s.id
         WHERE {where}
@@ -216,6 +219,7 @@ async def create_cashier(
         rate_percent=body.commission_percent,
         is_active=True,
         rating=100,
+        team_id=body.team_id,
     )
     db.add(cashier)
     await db.flush()
@@ -239,10 +243,10 @@ async def get_my_stats(
     cards_row = await db.execute(text("""
         SELECT
             COUNT(*) AS total_cards,
-            SUM(CASE WHEN is_active = 1 THEN 1 ELSE 0 END) AS active_cards,
+            COALESCE(SUM(CASE WHEN is_active = 1 THEN 1 ELSE 0 END), 0) AS active_cards,
             COALESCE(SUM(total_volume_limit), 0) AS total_volume_limit,
             COALESCE(SUM(current_volume), 0)     AS current_volume,
-            SUM(CASE WHEN limit_reached_notified = 1 THEN 1 ELSE 0 END) AS cards_at_limit
+            COALESCE(SUM(CASE WHEN limit_reached_notified = 1 THEN 1 ELSE 0 END), 0) AS cards_at_limit
         FROM cashier_cards WHERE cashier_id = :uid
     """), {"uid": uid})
     cards_stats = dict(cards_row.mappings().one())
@@ -388,12 +392,37 @@ async def extend_my_card_limit(
 # Cashier deposit — self endpoints
 # ---------------------------------------------------------------------------
 
+DEPOSIT_COINS = ["BTC", "LTC", "USDT"]
+
+
+async def _get_deposit_wallet(db, coin: str) -> str | None:
+    row = await db.execute(
+        text("SELECT value FROM system_settings WHERE `key` = :k"),
+        {"k": f"cashier_deposit_wallet_{coin}"},
+    )
+    rec = row.fetchone()
+    return (rec[0] or None) if rec else None
+
+
+async def _get_coin_rate_rub(db, coin: str) -> float:
+    row = await db.execute(
+        text("SELECT rate_rub, is_manual, manual_rate_rub FROM rates WHERE coin = :coin"),
+        {"coin": coin},
+    )
+    rec = row.mappings().one_or_none()
+    if not rec:
+        return 0.0
+    return float(
+        rec["manual_rate_rub"] if rec["is_manual"] and rec["manual_rate_rub"] else rec["rate_rub"]
+    )
+
+
 @router.get("/me/deposit")
 async def get_my_deposit(
     current_user: Support = Depends(require_cashier_or_admin),
     db: AsyncSession = Depends(get_db),
 ):
-    """Get current deposit balance, frozen amount, and system BTC address for top-up."""
+    """Deposit balance + system deposit addresses for BTC / LTC / USDT TRC20."""
     uid = current_user.id
 
     dep_row = await db.execute(
@@ -406,33 +435,22 @@ async def get_my_deposit(
     deposit_work = float(dep["deposit_work"] or 0) if dep else 0.0
     available = max(0.0, deposit - deposit_work)
 
-    # System BTC address for top-up
-    addr_row = await db.execute(
-        text("SELECT value FROM system_settings WHERE `key` = 'crypto_wallet_address_BTC'")
-    )
-    addr_rec = addr_row.fetchone()
-    system_address = addr_rec[0] if addr_rec else None
-
-    # Current BTC rate in RUB
-    rate_row = await db.execute(
-        text("SELECT rate_rub, is_manual, manual_rate_rub FROM rates WHERE coin = 'BTC'")
-    )
-    rate_rec = rate_row.mappings().one_or_none()
-    btc_rate_rub = 0.0
-    if rate_rec:
-        btc_rate_rub = float(
-            rate_rec["manual_rate_rub"]
-            if rate_rec["is_manual"] and rate_rec["manual_rate_rub"]
-            else rate_rec["rate_rub"]
-        )
+    wallets = {}
+    rates = {}
+    for coin in DEPOSIT_COINS:
+        wallets[coin] = await _get_deposit_wallet(db, coin)
+        rates[coin] = await _get_coin_rate_rub(db, coin)
 
     return {
         "deposit": deposit,
         "deposit_paid": deposit_paid,
         "deposit_work": deposit_work,
         "available": available,
-        "system_btc_address": system_address,
-        "btc_rate_rub": btc_rate_rub,
+        "wallets": wallets,   # {BTC: "addr", LTC: "addr", USDT: "addr"}
+        "rates": rates,       # {BTC: 7000000.0, LTC: 8000.0, USDT: 90.0}
+        # Legacy field kept for old clients
+        "system_btc_address": wallets.get("BTC"),
+        "btc_rate_rub": rates.get("BTC", 0.0),
     }
 
 
@@ -465,6 +483,65 @@ async def get_my_deposit_history(
     return {"items": items, "total": total, "pages": max(1, -(-total // limit)), "page": page}
 
 
+async def _verify_btc_ltc(tx_hash: str, system_address: str, coin: str) -> float:
+    """Returns received amount in coin units via Blockstream/Litecoinspace."""
+    if coin == "BTC":
+        url = f"https://blockstream.info/api/tx/{tx_hash}"
+    else:  # LTC
+        url = f"https://litecoinspace.org/api/tx/{tx_hash}"
+
+    import httpx
+    try:
+        async with httpx.AsyncClient(timeout=15) as client:
+            resp = await client.get(url)
+    except Exception as e:
+        raise HTTPException(502, f"Не удалось связаться с блокчейном: {e}")
+
+    if resp.status_code == 404:
+        raise HTTPException(400, "Транзакция не найдена в блокчейне. Проверьте хеш.")
+    if not resp.is_success:
+        raise HTTPException(502, "Ошибка при проверке транзакции в блокчейне")
+
+    tx = resp.json()
+    if not tx.get("status", {}).get("confirmed", False):
+        raise HTTPException(400, "Транзакция ещё не подтверждена. Дождитесь хотя бы 1 подтверждения.")
+
+    received = 0.0
+    for vout in tx.get("vout", []):
+        if vout.get("scriptpubkey_address") == system_address:
+            received += vout.get("value", 0) / 1e8
+
+    if received <= 0:
+        raise HTTPException(
+            400,
+            f"В транзакции нет выплаты на адрес системы ({system_address}). "
+            "Убедитесь, что вы отправили средства на правильный адрес."
+        )
+    return received
+
+
+async def _verify_usdt_trc20(tx_hash: str, system_address: str) -> float:
+    """Returns received USDT amount via TronScan."""
+    from app.services.tron_service import inspect_usdt_transfer
+    try:
+        result = await inspect_usdt_transfer(tx_hash)
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+    except Exception as e:
+        raise HTTPException(502, f"Ошибка TronScan: {e}")
+
+    to_addr = (result.get("toAddress") or "").strip().lower()
+    if to_addr != system_address.strip().lower():
+        raise HTTPException(
+            400,
+            f"Получатель в транзакции ({result.get('toAddress')}) не совпадает с адресом системы ({system_address})."
+        )
+    if result.get("confirmations", 0) < 1:
+        raise HTTPException(400, "Транзакция ещё не подтверждена. Дождитесь хотя бы 1 подтверждения.")
+
+    return float(result["amountUsdt"])
+
+
 @router.post("/me/deposit/topup")
 async def topup_my_deposit(
     body: DepositTopupRequest,
@@ -472,17 +549,20 @@ async def topup_my_deposit(
     db: AsyncSession = Depends(get_db),
 ):
     """
-    Cashier submits a BTC transaction hash to top up their deposit.
-    Backend verifies on blockchain that the TX has an output to the system address,
-    then credits the deposit in RUB at the current BTC rate.
+    Cashier submits a transaction hash to top up their deposit.
+    Supported: BTC (Blockstream), LTC (Litecoinspace), USDT TRC20 (TronScan).
     """
     coin = body.coin.upper()
-    if coin != "BTC":
-        raise HTTPException(400, "Поддерживается только BTC")
+    if coin not in DEPOSIT_COINS:
+        raise HTTPException(400, f"Неподдерживаемая монета. Допустимые: {', '.join(DEPOSIT_COINS)}")
 
-    tx_hash = body.tx_hash.strip().lower()
+    tx_hash = body.tx_hash.strip()
+    # BTC/LTC hashes are lowercase hex 64 chars; USDT TRC20 are 64 uppercase hex
     if len(tx_hash) != 64:
-        raise HTTPException(400, "Неверный формат хеша транзакции")
+        raise HTTPException(400, "Неверный формат хеша транзакции (должно быть 64 символа)")
+
+    if coin in ("BTC", "LTC"):
+        tx_hash = tx_hash.lower()
 
     # Check not already used
     dup = await db.execute(
@@ -495,104 +575,58 @@ async def topup_my_deposit(
             raise HTTPException(400, "Эта транзакция уже была зачтена")
         elif existing["status"] == "PENDING":
             raise HTTPException(400, "Эта транзакция уже ожидает подтверждения")
-        # REJECTED — allow retry
 
-    # Get system address
-    addr_row = await db.execute(
-        text("SELECT value FROM system_settings WHERE `key` = 'crypto_wallet_address_BTC'")
-    )
-    addr_rec = addr_row.fetchone()
-    if not addr_rec or not addr_rec[0]:
-        raise HTTPException(500, "Системный BTC адрес не настроен. Обратитесь к администратору.")
-    system_address = addr_rec[0]
+    # Get system deposit address
+    system_address = await _get_deposit_wallet(db, coin)
+    if not system_address:
+        raise HTTPException(500, f"Адрес депозита {coin} не настроен. Обратитесь к администратору.")
 
-    # Verify on blockchain (Blockstream API)
-    try:
-        loop = asyncio.get_event_loop()
-        resp = await loop.run_in_executor(
-            None,
-            lambda: _requests.get(
-                f"https://blockstream.info/api/tx/{tx_hash}", timeout=15
-            ),
-        )
-    except Exception as e:
-        raise HTTPException(502, f"Не удалось связаться с блокчейном: {e}")
+    # Verify on blockchain
+    if coin in ("BTC", "LTC"):
+        received_amount = await _verify_btc_ltc(tx_hash, system_address, coin)
+    else:  # USDT
+        received_amount = await _verify_usdt_trc20(tx_hash, system_address)
 
-    if resp.status_code == 404:
-        raise HTTPException(400, "Транзакция не найдена в блокчейне. Проверьте хеш.")
-    if not resp.ok:
-        raise HTTPException(502, "Ошибка при проверке транзакции в блокчейне")
+    # Get coin rate in RUB
+    coin_rate_rub = await _get_coin_rate_rub(db, coin)
+    if coin_rate_rub <= 0:
+        raise HTTPException(500, f"Курс {coin} не найден. Повторите позже.")
 
-    tx = resp.json()
-    if not tx.get("status", {}).get("confirmed", False):
-        raise HTTPException(400, "Транзакция ещё не подтверждена. Дождитесь хотя бы 1 подтверждения.")
+    amount_rub = round(received_amount * coin_rate_rub, 2)
 
-    # Sum outputs to system address
-    received_btc = 0.0
-    for vout in tx.get("vout", []):
-        if vout.get("scriptpubkey_address") == system_address:
-            received_btc += vout.get("value", 0) / 1e8
-
-    if received_btc <= 0:
-        raise HTTPException(
-            400,
-            f"В транзакции нет выплаты на адрес системы ({system_address}). "
-            "Убедитесь, что вы отправили средства на правильный адрес."
-        )
-
-    # Get current BTC rate
-    rate_row = await db.execute(
-        text("SELECT rate_rub, is_manual, manual_rate_rub FROM rates WHERE coin = 'BTC'")
-    )
-    rate_rec = rate_row.mappings().one_or_none()
-    if not rate_rec:
-        raise HTTPException(500, "Курс BTC не найден. Повторите позже.")
-    btc_rate_rub = float(
-        rate_rec["manual_rate_rub"]
-        if rate_rec["is_manual"] and rate_rec["manual_rate_rub"]
-        else rate_rec["rate_rub"]
-    )
-    if btc_rate_rub <= 0:
-        raise HTTPException(500, "Некорректный курс BTC. Повторите позже.")
-
-    amount_rub = round(received_btc * btc_rate_rub, 2)
-
-    # Insert or update deposit record
+    # Save deposit record
     if existing and existing["status"] == "REJECTED":
         await db.execute(text("""
             UPDATE cashier_deposits SET
                 cashier_id = :uid, coin = :coin,
-                amount_coin = :btc, btc_rate_rub = :rate, amount_rub = :rub,
+                amount_coin = :amount, btc_rate_rub = :rate, amount_rub = :rub,
                 status = 'CONFIRMED', reject_reason = NULL, confirmed_at = NOW()
             WHERE tx_hash = :tx
-        """), {
-            "uid": current_user.id, "coin": coin,
-            "btc": received_btc, "rate": btc_rate_rub, "rub": amount_rub,
-            "tx": tx_hash,
-        })
+        """), {"uid": current_user.id, "coin": coin, "amount": received_amount,
+               "rate": coin_rate_rub, "rub": amount_rub, "tx": tx_hash})
     else:
         await db.execute(text("""
             INSERT INTO cashier_deposits
                 (cashier_id, tx_hash, coin, amount_coin, btc_rate_rub, amount_rub, status, confirmed_at)
             VALUES
-                (:uid, :tx, :coin, :btc, :rate, :rub, 'CONFIRMED', NOW())
-        """), {
-            "uid": current_user.id, "tx": tx_hash, "coin": coin,
-            "btc": received_btc, "rate": btc_rate_rub, "rub": amount_rub,
-        })
+                (:uid, :tx, :coin, :amount, :rate, :rub, 'CONFIRMED', NOW())
+        """), {"uid": current_user.id, "tx": tx_hash, "coin": coin,
+               "amount": received_amount, "rate": coin_rate_rub, "rub": amount_rub})
 
-    # Credit deposit
     await db.execute(
         text("UPDATE supports SET deposit = deposit + :amount WHERE id = :uid"),
         {"amount": amount_rub, "uid": current_user.id},
     )
+    await db.commit()
 
+    decimals = 2 if coin == "USDT" else 8
     return {
         "success": True,
-        "received_btc": received_btc,
-        "btc_rate_rub": btc_rate_rub,
+        "coin": coin,
+        "received_amount": round(received_amount, decimals),
+        "coin_rate_rub": coin_rate_rub,
         "credited_rub": amount_rub,
-        "message": f"Депозит пополнен на {amount_rub:.2f} ₽ ({received_btc:.8f} BTC × {btc_rate_rub:.2f} ₽/BTC)",
+        "message": f"Депозит пополнен на {amount_rub:,.2f} ₽  ({received_amount:.{decimals}f} {coin} × {coin_rate_rub:,.2f} ₽/{coin})",
     }
 
 
@@ -605,16 +639,33 @@ async def get_my_orders(
     page: int = Query(1, ge=1),
     limit: int = Query(20, ge=1, le=100),
     card_id: Optional[int] = None,
+    status: Optional[str] = None,
     current_user: Support = Depends(require_cashier_or_admin),
     db: AsyncSession = Depends(get_db),
 ):
-    """Simplified order list for cashier — no client info, no rate/sum details."""
+    """Full order list for cashier: date, card, sum, rate, sum in USD, status."""
     uid = current_user.id
     params: dict = {"uid": uid, "limit": limit, "offset": (page - 1) * limit}
     where = "o.cashier_card_id IN (SELECT id FROM cashier_cards WHERE cashier_id = :uid)"
     if card_id:
         where += " AND o.cashier_card_id = :card_id"
         params["card_id"] = card_id
+    if status:
+        where += " AND o.status = :status"
+        params["status"] = status.upper()
+
+    # Get USDT rate for USD equivalent calculation
+    usdt_row = await db.execute(
+        text("SELECT rate_rub, is_manual, manual_rate_rub FROM rates WHERE coin = 'USDT'")
+    )
+    usdt_rec = usdt_row.mappings().one_or_none()
+    usdt_rate = 0.0
+    if usdt_rec:
+        usdt_rate = float(
+            usdt_rec["manual_rate_rub"]
+            if usdt_rec["is_manual"] and usdt_rec["manual_rate_rub"]
+            else usdt_rec["rate_rub"]
+        )
 
     rows = await db.execute(text(f"""
         SELECT
@@ -623,6 +674,10 @@ async def get_my_orders(
             o.coin,
             o.dir,
             o.amount_coin,
+            o.sum_rub,
+            o.rate_rub,
+            o.status,
+            o.created_at,
             o.completed_at,
             cc.card_number,
             cc.bank_name,
@@ -637,10 +692,11 @@ async def get_my_orders(
     orders = []
     for r in rows:
         d = dict(r._mapping)
-        # Mask card number — show only last 4 digits
-        cn = d.get("card_number") or ""
+        sum_rub = float(d.get("sum_rub") or 0)
+        d["sum_usd"] = round(sum_rub / usdt_rate, 2) if usdt_rate > 0 else None
+        # Mask full card number
+        cn = d.pop("card_number") or ""
         d["card_masked"] = f"****{cn[-4:]}" if len(cn) >= 4 else cn
-        del d["card_number"]
         orders.append(d)
 
     count_row = await db.execute(
@@ -649,6 +705,106 @@ async def get_my_orders(
     )
     total = count_row.scalar() or 0
     return {"orders": orders, "total": total, "pages": max(1, -(-total // limit)), "page": page}
+
+
+@router.post("/me/orders/{order_id}/confirm")
+async def confirm_order_payment(
+    order_id: int,
+    current_user: Support = Depends(require_cashier_or_admin),
+    db: AsyncSession = Depends(get_db),
+):
+    """Cashier confirms that payment arrived on their card (AWAITING_CONFIRM → AWAITING_HASH)."""
+    # Verify this order belongs to cashier's card
+    row = await db.execute(text("""
+        SELECT o.* FROM orders o
+        JOIN cashier_cards cc ON cc.id = o.cashier_card_id AND cc.cashier_id = :uid
+        WHERE o.id = :oid
+        LIMIT 1
+    """), {"uid": current_user.id, "oid": order_id})
+    order = row.mappings().one_or_none()
+    if not order:
+        raise HTTPException(404, "Заявка не найдена или не принадлежит вашей карте")
+    order = dict(order)
+
+    if order["status"] != "AWAITING_CONFIRM":
+        raise HTTPException(400, f"Неверный статус: {order['status']}. Ожидается: AWAITING_CONFIRM")
+
+    sum_rub = float(order.get("sum_rub") or 0)
+
+    # Freeze cashier deposit
+    dep_row = await db.execute(
+        text("SELECT deposit, deposit_work FROM supports WHERE id = :uid"),
+        {"uid": current_user.id},
+    )
+    dep = dep_row.mappings().one_or_none()
+    if dep:
+        available = float(dep["deposit"] or 0) - float(dep["deposit_work"] or 0)
+        if available < sum_rub:
+            raise HTTPException(
+                400,
+                f"Недостаточно средств в депозите. Доступно: {available:.2f} ₽, нужно: {sum_rub:.2f} ₽"
+            )
+        await db.execute(
+            text("UPDATE supports SET deposit_work = deposit_work + :amount WHERE id = :uid"),
+            {"amount": sum_rub, "uid": current_user.id},
+        )
+
+    # Move to AWAITING_HASH
+    await db.execute(
+        text("""
+            UPDATE orders SET status = 'AWAITING_HASH',
+                sla_user_paid_at = COALESCE(sla_user_paid_at, NOW()),
+                updated_at = NOW()
+            WHERE id = :id
+        """),
+        {"id": order_id},
+    )
+    await db.commit()
+
+    # Emit socket
+    from app.routers.orders import ORDER_SELECT
+    import app.socket.socket_service as sio
+    updated_row = await db.execute(text(f"{ORDER_SELECT} WHERE o.id = :id"), {"id": order_id})
+    updated_order = dict(updated_row.mappings().one())
+    await sio.emit_order_status_changed({
+        "orderId": order_id,
+        "oldStatus": "AWAITING_CONFIRM",
+        "newStatus": "AWAITING_HASH",
+        "order": updated_order,
+    })
+    await sio.emit_order_updated(updated_order)
+
+    # Trigger auto-send crypto if applicable
+    auto_send_triggered = False
+    if order.get("dir") == "BUY" and order.get("user_crypto_address") and float(order.get("amount_coin") or 0) > 0:
+        try:
+            import asyncio
+            from app.services.crypto_wallet_service import get_active_mnemonic, SUPPORTED_COINS
+            from app.routers.deals import _auto_send_crypto
+            coin = order["coin"]
+            if coin in SUPPORTED_COINS:
+                mnemonic = await get_active_mnemonic(coin, db)
+                if mnemonic:
+                    tg_row = await db.execute(
+                        text("SELECT u.tg_id FROM orders o JOIN users u ON u.id = o.user_id WHERE o.id = :id"),
+                        {"id": order_id},
+                    )
+                    tg_rec = tg_row.fetchone()
+                    asyncio.create_task(_auto_send_crypto(
+                        order_id=order_id,
+                        coin=coin,
+                        mnemonic=mnemonic,
+                        to_address=order["user_crypto_address"],
+                        amount=float(order["amount_coin"]),
+                        bot_id=order.get("bot_id"),
+                        tg_id=int(tg_rec.tg_id) if tg_rec else None,
+                        unique_id=order.get("unique_id"),
+                    ))
+                    auto_send_triggered = True
+        except Exception as e:
+            logger.warning(f"[cashier confirm] Auto-send failed for order {order_id}: {e}")
+
+    return {"success": True, "orderDetails": updated_order, "autoSendTriggered": auto_send_triggered}
 
 
 # ---------------------------------------------------------------------------
@@ -873,7 +1029,110 @@ async def list_cashier_chats(
 
 
 # ---------------------------------------------------------------------------
-# Superadmin — individual cashier management (/{cashier_id} AFTER /me/...)
+# Cashier Teams management  (MUST be before /{cashier_id} catch-all)
+# ---------------------------------------------------------------------------
+
+class TeamCreateRequest(BaseModel):
+    name: str
+    bot_token: Optional[str] = None
+
+class TeamUpdateRequest(BaseModel):
+    name: Optional[str] = None
+    bot_token: Optional[str] = None
+
+
+@router.get("/teams")
+async def list_teams(
+    current_user: Support = Depends(require_superadmin),
+    db: AsyncSession = Depends(get_db),
+):
+    rows = await db.execute(text("""
+        SELECT t.id, t.name, t.bot_token, t.deposit, t.deposit_work, t.deposit_paid, t.created_at,
+               COUNT(s.id) AS member_count
+        FROM cashier_teams t
+        LEFT JOIN supports s ON s.team_id = t.id AND s.role = 'CASHIER'
+        GROUP BY t.id
+        ORDER BY t.created_at DESC
+    """))
+    return {"teams": [dict(r._mapping) for r in rows]}
+
+
+@router.post("/teams", status_code=201)
+async def create_team(
+    body: TeamCreateRequest,
+    current_user: Support = Depends(require_superadmin),
+    db: AsyncSession = Depends(get_db),
+):
+    result = await db.execute(text(
+        "INSERT INTO cashier_teams (name, bot_token) VALUES (:name, :token)"
+    ), {"name": body.name, "token": body.bot_token or None})
+    await db.commit()
+    team_id = result.lastrowid
+
+    if body.bot_token:
+        from bot.cashier_bot_manager import cashier_bot_manager
+        asyncio.create_task(cashier_bot_manager.start_bot(team_id, body.bot_token))
+
+    return {"message": "Команда создана", "id": team_id}
+
+
+@router.put("/teams/{team_id}")
+async def update_team(
+    team_id: int,
+    body: TeamUpdateRequest,
+    current_user: Support = Depends(require_superadmin),
+    db: AsyncSession = Depends(get_db),
+):
+    fields, params = [], {"tid": team_id}
+    if body.name is not None:
+        fields.append("name = :name"); params["name"] = body.name
+    if body.bot_token is not None:
+        fields.append("bot_token = :token"); params["token"] = body.bot_token or None
+    if fields:
+        await db.execute(text(f"UPDATE cashier_teams SET {', '.join(fields)} WHERE id = :tid"), params)
+        await db.commit()
+
+    if body.bot_token is not None:
+        from bot.cashier_bot_manager import cashier_bot_manager
+        if body.bot_token:
+            asyncio.create_task(cashier_bot_manager.start_bot(team_id, body.bot_token))
+        else:
+            asyncio.create_task(cashier_bot_manager.stop_bot(team_id))
+
+    return {"message": "Команда обновлена"}
+
+
+@router.delete("/teams/{team_id}")
+async def delete_team(
+    team_id: int,
+    current_user: Support = Depends(require_superadmin),
+    db: AsyncSession = Depends(get_db),
+):
+    from bot.cashier_bot_manager import cashier_bot_manager
+    asyncio.create_task(cashier_bot_manager.stop_bot(team_id))
+    await db.execute(text("DELETE FROM cashier_teams WHERE id = :id"), {"id": team_id})
+    await db.commit()
+    return {"message": "Команда удалена"}
+
+
+@router.get("/teams/{team_id}/members")
+async def get_team_members(
+    team_id: int,
+    current_user: Support = Depends(require_superadmin),
+    db: AsyncSession = Depends(get_db),
+):
+    rows = await db.execute(text("""
+        SELECT id, login, is_active, rate_percent AS commission_percent,
+               tg_id, created_at
+        FROM supports
+        WHERE team_id = :tid AND role = 'CASHIER'
+        ORDER BY created_at DESC
+    """), {"tid": team_id})
+    return {"members": [dict(r._mapping) for r in rows]}
+
+
+# ---------------------------------------------------------------------------
+# Superadmin — individual cashier management (/{cashier_id} AFTER /me/... and /teams/...)
 # ---------------------------------------------------------------------------
 
 @router.get("/{cashier_id}")
@@ -924,6 +1183,8 @@ async def update_cashier(
         cashier.rate_percent = body.commission_percent
     if body.is_active is not None:
         cashier.is_active = body.is_active
+    if body.team_id is not None:
+        cashier.team_id = body.team_id or None
     if body.password and body.password.strip():
         if len(body.password) < 6:
             raise HTTPException(400, "Пароль должен содержать минимум 6 символов")
@@ -1138,3 +1399,50 @@ async def admin_extend_card_limit(
         raise HTTPException(404, "Карта не найдена")
     await cashier_service.extend_card_limit(card_id, body.extra_volume, db)
     return {"message": "Лимит расширен"}
+
+
+# ---------------------------------------------------------------------------
+# Team members management
+# ---------------------------------------------------------------------------
+
+@router.get("/{cashier_id}/members")
+async def get_cashier_members(
+    cashier_id: int,
+    current_user: Support = Depends(require_superadmin),
+    db: AsyncSession = Depends(get_db),
+):
+    rows = await db.execute(text(
+        "SELECT id, tg_id, username, joined_at FROM cashier_members "
+        "WHERE cashier_id = :cid ORDER BY joined_at DESC"
+    ), {"cid": cashier_id})
+    return {"members": [dict(r._mapping) for r in rows]}
+
+
+@router.delete("/{cashier_id}/members/{tg_id}")
+async def remove_cashier_member(
+    cashier_id: int,
+    tg_id: int,
+    current_user: Support = Depends(require_superadmin),
+    db: AsyncSession = Depends(get_db),
+):
+    result = await db.execute(text(
+        "DELETE FROM cashier_members WHERE cashier_id = :cid AND tg_id = :tid"
+    ), {"cid": cashier_id, "tid": tg_id})
+    if result.rowcount == 0:
+        raise HTTPException(404, "Участник не найден")
+    await db.commit()
+    return {"message": "Участник удалён"}
+
+
+@router.get("/me/members")
+async def get_my_members(
+    current_user: Support = Depends(require_cashier_or_admin),
+    db: AsyncSession = Depends(get_db),
+):
+    rows = await db.execute(text(
+        "SELECT id, tg_id, username, joined_at FROM cashier_members "
+        "WHERE cashier_id = :cid ORDER BY joined_at DESC"
+    ), {"cid": current_user.id})
+    return {"members": [dict(r._mapping) for r in rows]}
+
+

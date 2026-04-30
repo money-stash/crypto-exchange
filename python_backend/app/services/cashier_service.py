@@ -79,6 +79,19 @@ async def try_auto_assign_cashier_card(order_id: int, sum_rub: float, bot_id: in
     except Exception as exc:
         logger.warning(f"[cashier] Telegram notification failed for order {order_id}: {exc}")
 
+    # Notify cashier via their personal Telegram
+    try:
+        async with AsyncSessionLocal() as db3:
+            order_row = await db3.execute(
+                text("SELECT * FROM orders WHERE id = :id"), {"id": order_id}
+            )
+            order_data = order_row.mappings().one_or_none()
+            if order_data:
+                from app.services.cashier_notify import notify_order_assigned
+                await notify_order_assigned(card["cashier_id"], dict(order_data), card)
+    except Exception as exc:
+        logger.warning(f"[cashier] Cashier Telegram notify failed for order {order_id}: {exc}")
+
     return True
 
 

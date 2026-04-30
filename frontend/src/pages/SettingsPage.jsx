@@ -318,6 +318,122 @@ const BotSettingsSection = ({ botId }) => {
   );
 };
 
+// ── Адреса для пополнения депозита кассиров ────────────────────────────────
+const DEPOSIT_COINS = [
+  { coin: 'BTC',  label: 'Bitcoin (BTC)',        placeholder: 'bc1q... или 1... или 3...' },
+  { coin: 'LTC',  label: 'Litecoin (LTC)',        placeholder: 'ltc1q... или L...' },
+  { coin: 'USDT', label: 'USDT TRC20',            placeholder: 'T...' },
+];
+
+const CashierDepositWalletsSection = () => {
+  const [wallets, setWallets] = useState({ BTC: null, LTC: null, USDT: null });
+  const [editing, setEditing] = useState(null); // coin string
+  const [inputVal, setInputVal] = useState('');
+  const [saving, setSaving] = useState(false);
+
+  const load = useCallback(async () => {
+    try {
+      const res = await settingsApi.getCashierDepositWallets();
+      setWallets(res.data.wallets);
+    } catch { toast.error('Ошибка загрузки депозитных кошельков'); }
+  }, []);
+
+  useEffect(() => { load(); }, [load]);
+
+  const openEdit = (coin) => {
+    setEditing(coin);
+    setInputVal(wallets[coin] || '');
+  };
+
+  const handleSave = async () => {
+    if (!inputVal.trim()) return toast.error('Введите адрес');
+    setSaving(true);
+    try {
+      await settingsApi.setCashierDepositWallet(editing, inputVal.trim());
+      toast.success(`Адрес ${editing} сохранён`);
+      setEditing(null);
+      load();
+    } catch (e) {
+      toast.error(e?.response?.data?.detail || 'Ошибка сохранения');
+    } finally { setSaving(false); }
+  };
+
+  const handleDelete = async (coin) => {
+    if (!window.confirm(`Удалить адрес ${coin} для депозита кассиров?`)) return;
+    try {
+      await settingsApi.deleteCashierDepositWallet(coin);
+      toast.success(`Адрес ${coin} удалён`);
+      load();
+    } catch { toast.error('Ошибка'); }
+  };
+
+  return (
+    <section className="card space-y-4">
+      <div>
+        <h2 className="text-lg font-semibold text-gray-900 dark:text-gray-100">Адреса для пополнения депозита кассиров</h2>
+        <p className="text-xs text-gray-500 dark:text-gray-400 mt-1">
+          Кассиры отправляют средства на эти адреса и прикладывают хеш транзакции — система верифицирует и зачисляет депозит автоматически.
+        </p>
+      </div>
+      <div className="space-y-3">
+        {DEPOSIT_COINS.map(({ coin, label, placeholder }) => (
+          <div key={coin} className="flex items-center gap-3 bg-gray-50 dark:bg-gray-900/40 rounded-xl px-4 py-3">
+            <div className="flex-1 min-w-0">
+              <p className="text-xs font-semibold text-gray-500 dark:text-gray-400">{label}</p>
+              {wallets[coin] ? (
+                <p className="font-mono text-sm text-gray-900 dark:text-white break-all mt-0.5">{wallets[coin]}</p>
+              ) : (
+                <p className="text-sm text-gray-400 italic mt-0.5">Не настроен — кассиры не смогут пополнить депозит в {coin}</p>
+              )}
+            </div>
+            <div className="flex gap-2 flex-shrink-0">
+              <button onClick={() => openEdit(coin)}
+                className="px-3 py-1.5 bg-blue-50 dark:bg-blue-900/30 text-blue-600 dark:text-blue-400 rounded-lg text-xs font-medium hover:bg-blue-100 transition-colors">
+                {wallets[coin] ? 'Изменить' : 'Задать'}
+              </button>
+              {wallets[coin] && (
+                <button onClick={() => handleDelete(coin)}
+                  className="px-3 py-1.5 bg-red-50 dark:bg-red-900/30 text-red-600 dark:text-red-400 rounded-lg text-xs font-medium hover:bg-red-100 transition-colors">
+                  Удалить
+                </button>
+              )}
+            </div>
+          </div>
+        ))}
+      </div>
+
+      {editing && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50">
+          <div className="bg-white dark:bg-gray-800 rounded-2xl shadow-xl w-full max-w-md mx-4 p-6">
+            <h3 className="text-lg font-bold text-gray-900 dark:text-white mb-4">
+              Адрес для пополнения в {editing}
+            </h3>
+            <input
+              className="w-full px-3 py-2 text-sm font-mono border border-gray-200 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-700 text-gray-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-blue-500"
+              value={inputVal}
+              onChange={e => setInputVal(e.target.value)}
+              placeholder={DEPOSIT_COINS.find(c => c.coin === editing)?.placeholder}
+            />
+            <p className="text-xs text-gray-400 mt-1">
+              Кассиры будут отправлять средства на этот адрес для пополнения депозита.
+            </p>
+            <div className="flex gap-3 mt-5">
+              <button onClick={() => setEditing(null)}
+                className="flex-1 py-2 border border-gray-200 dark:border-gray-600 rounded-lg text-sm text-gray-600 dark:text-gray-300 hover:bg-gray-50 dark:hover:bg-gray-700 transition-colors">
+                Отмена
+              </button>
+              <button onClick={handleSave} disabled={saving}
+                className="flex-1 py-2 bg-blue-600 text-white rounded-lg text-sm font-medium hover:bg-blue-700 disabled:opacity-50 transition-colors">
+                {saving ? 'Сохранение...' : 'Сохранить'}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+    </section>
+  );
+};
+
 // ── Главная страница настроек ───────────────────────────────────────────────
 const SettingsPage = () => {
   const { user } = useAuth();
@@ -533,6 +649,8 @@ const SettingsPage = () => {
           )}
         </section>
       )}
+
+      {canEditFinance && <CashierDepositWalletsSection />}
     </div>
   );
 };

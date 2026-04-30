@@ -12,6 +12,7 @@ class Settings(BaseSettings):
     OPERATOR_ALERT_BOT_TOKEN: str = ""
     MANAGER_ALERT_BOT_TOKEN: str = ""
     ACTIVATION_ALERT_BOT_TOKEN: str = ""
+    CASHIER_NOTIFY_BOT_TOKEN: str = ""  # Bot token for cashier Telegram notifications
     BYBIT_API_BASE: str = "https://api.bybit.com"
     BYBIT_P2P_API_URL: str = "https://api2.bybit.com/fiat/otc/item/online"
     KRAKEN_API_URL: str = "https://api.kraken.com/0/public/Ticker"

@@ -39,7 +39,7 @@ def _amount_keyboard(input_mode: str, coin: str) -> InlineKeyboardMarkup:
     toggle_label = "Ввести в RUB 💱" if input_mode == "CRYPTO" else f"Ввести в {coin} 💱"
     builder = InlineKeyboardBuilder()
     builder.row(InlineKeyboardButton(text=toggle_label, callback_data="sell_toggle_mode"))
-    builder.row(InlineKeyboardButton(text="◀️ Назад", callback_data=f"sell_coin_{coin}"))
+    builder.row(InlineKeyboardButton(text="◀️ Назад", callback_data="sell_back_to_coins"))
     return builder.as_markup()
 
 
@@ -139,6 +139,17 @@ async def sell_toggle_mode(callback: CallbackQuery, state: FSMContext) -> None:
     await callback.message.edit_text(
         f"📦 <b>Продажа {coin}</b>\n\nВведите объём в <b>{unit}</b>:",
         reply_markup=_amount_keyboard(new_mode, coin),
+        parse_mode="HTML",
+    )
+    await callback.answer()
+
+
+@router.callback_query(lambda c: c.data == "sell_back_to_coins")
+async def sell_back_to_coins(callback: CallbackQuery, state: FSMContext) -> None:
+    await state.set_state(SellStates.choosing_coin)
+    await callback.message.edit_text(
+        "💵 <b>Продажа криптовалюты</b>\n\nВыберите монету:",
+        reply_markup=_coin_keyboard(),
         parse_mode="HTML",
     )
     await callback.answer()
@@ -293,6 +304,7 @@ async def sell_back_to_card(callback: CallbackQuery, state: FSMContext) -> None:
         "💳 <b>Реквизиты для выплаты</b>\n\n"
         "Введите номер карты (16 цифр) или номер телефона (+7XXXXXXXXXX):",
         parse_mode="HTML",
+        reply_markup=_back_keyboard("sell_back_to_amount"),
     )
     await callback.answer()
 
@@ -319,6 +331,7 @@ async def sell_back_to_bank(callback: CallbackQuery, state: FSMContext) -> None:
     await state.set_state(SellStates.entering_bank)
     await callback.message.edit_text(
         "🏦 Введите название банка (например: Сбербанк, Тинькофф, Альфа-банк):",
+        reply_markup=_back_keyboard("sell_back_to_card"),
     )
     await callback.answer()
 

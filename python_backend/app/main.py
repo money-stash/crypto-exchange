@@ -20,6 +20,7 @@ from app.routers import (
 )
 import app.socket.socket_service as socket_service
 from bot.manager import bot_manager
+from bot.cashier_bot_manager import cashier_bot_manager
 
 logging.basicConfig(
     level=logging.INFO,
@@ -141,6 +142,7 @@ async def lifespan(app: FastAPI):
         await conn.execute(sqlalchemy.text("SELECT 1"))
     print("✅ Database connected")
     await bot_manager.initialize()
+    await cashier_bot_manager.start_all()
 
     # Сразу обновляем курсы при старте
     await _update_rates_job()
@@ -155,6 +157,7 @@ async def lifespan(app: FastAPI):
 
     scheduler.shutdown(wait=False)
     await bot_manager.stop_all()
+    await cashier_bot_manager.stop_all()
     await engine.dispose()
     print("🛑 Database disconnected")
 

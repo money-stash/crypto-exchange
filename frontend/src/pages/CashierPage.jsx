@@ -1,6 +1,7 @@
-import React, { useState, useEffect, useCallback } from 'react';
+import React, { useState, useEffect, useCallback, useRef } from 'react';
 import { toast } from 'react-toastify';
 import { cashiersApi } from '../services/api';
+import { CreditCard, MessageSquare, Send } from 'lucide-react';
 
 const initialForm = {
   card_number: '',
@@ -12,7 +13,111 @@ const initialForm = {
   interval_minutes: '0',
 };
 
+const TABS = [
+  { key: 'cards', label: 'Мои карты', icon: CreditCard },
+  { key: 'chat',  label: 'Чат с менеджером', icon: MessageSquare },
+];
+
+function ChatTab() {
+  const [messages, setMessages] = useState([]);
+  const [loading, setLoading] = useState(true);
+  const [input, setInput] = useState('');
+  const [sending, setSending] = useState(false);
+  const bottomRef = useRef(null);
+
+  const loadChat = useCallback(async () => {
+    try {
+      const res = await cashiersApi.getMyChat();
+      setMessages(res.data.messages || []);
+      await cashiersApi.markMyChatRead();
+    } catch {
+      toast.error('Ошибка загрузки чата');
+    } finally {
+      setLoading(false);
+    }
+  }, []);
+
+  useEffect(() => { loadChat(); }, [loadChat]);
+  useEffect(() => { bottomRef.current?.scrollIntoView({ behavior: 'smooth' }); }, [messages]);
+
+  const handleSend = async () => {
+    const text = input.trim();
+    if (!text) return;
+    setSending(true);
+    try {
+      const res = await cashiersApi.sendToManager(text);
+      setMessages(prev => [...prev, res.data]);
+      setInput('');
+    } catch {
+      toast.error('Ошибка отправки');
+    } finally {
+      setSending(false);
+    }
+  };
+
+  const fmtTime = (dt) => {
+    if (!dt) return '';
+    return new Date(dt).toLocaleString('ru-RU', { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' });
+  };
+
+  if (loading) return (
+    <div className="flex justify-center py-12">
+      <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-blue-600" />
+    </div>
+  );
+
+  return (
+    <div className="bg-white dark:bg-gray-800 rounded-xl border border-gray-200 dark:border-gray-700 flex flex-col" style={{ height: '520px' }}>
+      <div className="px-4 py-3 border-b border-gray-100 dark:border-gray-700 flex-shrink-0">
+        <p className="text-sm font-medium text-gray-900 dark:text-white">Переписка с менеджером</p>
+        <p className="text-xs text-gray-400">Задайте вопрос или сообщите о проблеме</p>
+      </div>
+
+      <div className="flex-1 overflow-y-auto p-4 space-y-2">
+        {messages.length === 0 ? (
+          <p className="text-center text-sm text-gray-400 py-8">Нет сообщений. Напишите первым.</p>
+        ) : messages.map(msg => {
+          const isMe = msg.sender_type === 'CASHIER';
+          return (
+            <div key={msg.id} className={`flex ${isMe ? 'justify-end' : 'justify-start'}`}>
+              <div className={`max-w-[75%] rounded-xl px-3 py-2 ${
+                isMe
+                  ? 'bg-blue-600 text-white'
+                  : 'bg-gray-100 dark:bg-gray-700 text-gray-900 dark:text-white'
+              }`}>
+                <p className="text-sm break-words">{msg.message}</p>
+                <p className={`text-xs mt-0.5 ${isMe ? 'text-blue-200' : 'text-gray-400'}`}>
+                  {isMe ? 'Вы' : (msg.sender_login || 'Менеджер')} · {fmtTime(msg.created_at)}
+                </p>
+              </div>
+            </div>
+          );
+        })}
+        <div ref={bottomRef} />
+      </div>
+
+      <div className="px-4 py-3 border-t border-gray-100 dark:border-gray-700 flex-shrink-0 flex gap-2">
+        <input
+          className="flex-1 px-3 py-2 text-sm border border-gray-200 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-700 text-gray-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-blue-500"
+          placeholder="Написать менеджеру..."
+          value={input}
+          onChange={e => setInput(e.target.value)}
+          onKeyDown={e => e.key === 'Enter' && !e.shiftKey && handleSend()}
+        />
+        <button
+          onClick={handleSend}
+          disabled={sending || !input.trim()}
+          className="px-3 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 disabled:opacity-50 transition-colors"
+        >
+          <Send className="w-4 h-4" />
+        </button>
+      </div>
+    </div>
+  );
+}
+
 export default function CashierPage() {
+  const [tab, setTab] = useState('cards');
   const [stats, setStats] = useState(null);
   const [cards, setCards] = useState([]);
   const [deposit, setDeposit] = useState(null);
@@ -25,8 +130,10 @@ export default function CashierPage() {
   const [extendCard, setExtendCard] = useState(null);
   const [extendAmount, setExtendAmount] = useState('');
   const [showTopupModal, setShowTopupModal] = useState(false);
+  const [topupCoin, setTopupCoin] = useState('BTC');
   const [topupTxHash, setTopupTxHash] = useState('');
   const [topupLoading, setTopupLoading] = useState(false);
+  const [depositTab, setDepositTab] = useState('BTC');
 
   const load = useCallback(async () => {
     try {
@@ -142,7 +249,7 @@ export default function CashierPage() {
     if (!hash || hash.length !== 64) return toast.error('Введите корректный хеш транзакции (64 символа)');
     setTopupLoading(true);
     try {
-      const res = await cashiersApi.topupMyDeposit({ tx_hash: hash, coin: 'BTC' });
+      const res = await cashiersApi.topupMyDeposit({ tx_hash: hash, coin: topupCoin });
       toast.success(res.data.message);
       setShowTopupModal(false);
       setTopupTxHash('');
@@ -153,6 +260,9 @@ export default function CashierPage() {
       setTopupLoading(false);
     }
   };
+
+  const DEPOSIT_COINS = ['BTC', 'LTC', 'USDT'];
+  const coinLabel = { BTC: 'Bitcoin', LTC: 'Litecoin', USDT: 'USDT TRC20' };
 
   const fmtRub = (v) => Number(v || 0).toLocaleString('ru-RU', { maximumFractionDigits: 0 });
   const pct = (used, limit) => {
@@ -171,14 +281,34 @@ export default function CashierPage() {
   return (
     <div className="max-w-5xl mx-auto space-y-6">
       <div className="flex items-center justify-between">
-        <h1 className="text-xl font-bold text-gray-900 dark:text-white">Мои карты</h1>
-        <button
-          onClick={openAdd}
-          className="px-4 py-2 bg-blue-600 text-white rounded-lg text-sm font-medium hover:bg-blue-700 transition-colors"
-        >
-          + Добавить карту
-        </button>
+        <h1 className="text-xl font-bold text-gray-900 dark:text-white">Кабинет кассира</h1>
+        {tab === 'cards' && (
+          <button
+            onClick={openAdd}
+            className="px-4 py-2 bg-blue-600 text-white rounded-lg text-sm font-medium hover:bg-blue-700 transition-colors"
+          >
+            + Добавить карту
+          </button>
+        )}
       </div>
+
+      {/* Tabs */}
+      <div className="flex gap-1 bg-gray-100 dark:bg-gray-800 p-1 rounded-xl w-fit">
+        {TABS.map(({ key, label, icon: Icon }) => (
+          <button key={key} onClick={() => setTab(key)}
+            className={`flex items-center gap-2 px-4 py-2 rounded-lg text-sm font-medium transition-colors ${
+              tab === key
+                ? 'bg-white dark:bg-gray-700 text-gray-900 dark:text-white shadow-sm'
+                : 'text-gray-500 dark:text-gray-400 hover:text-gray-700 dark:hover:text-gray-200'
+            }`}>
+            <Icon className="w-4 h-4" />
+            {label}
+          </button>
+        ))}
+      </div>
+
+      {tab === 'chat' && <ChatTab />}
+      {tab === 'cards' && (<>
 
       {/* Deposit panel */}
       {deposit && (
@@ -186,7 +316,7 @@ export default function CashierPage() {
           <div className="flex items-center justify-between mb-4">
             <h2 className="text-base font-semibold text-gray-900 dark:text-white">Мой депозит</h2>
             <button
-              onClick={() => { setShowTopupModal(true); setTopupTxHash(''); }}
+              onClick={() => { setShowTopupModal(true); setTopupCoin(depositTab); setTopupTxHash(''); }}
               className="px-4 py-1.5 bg-green-600 hover:bg-green-700 text-white rounded-lg text-sm font-medium transition-colors"
             >
               + Пополнить
@@ -213,23 +343,44 @@ export default function CashierPage() {
 
           {deposit.available <= 0 && (
             <div className="mb-4 p-3 bg-red-50 dark:bg-red-900/20 border border-red-200 dark:border-red-700 rounded-lg text-sm text-red-700 dark:text-red-400">
-              Депозит исчерпан. Вы не сможете принимать новые заявки. Пополните депозит с биржи.
+              Депозит исчерпан. Вы не сможете принимать новые заявки. Пополните депозит.
             </div>
           )}
 
-          {deposit.system_btc_address && (
-            <div className="p-3 bg-gray-50 dark:bg-gray-900/50 rounded-lg">
-              <p className="text-xs text-gray-500 dark:text-gray-400 mb-1">Адрес для пополнения (BTC)</p>
-              <code className="text-sm font-mono text-gray-900 dark:text-white break-all">
-                {deposit.system_btc_address}
-              </code>
-              {deposit.btc_rate_rub > 0 && (
-                <p className="text-xs text-gray-400 dark:text-gray-500 mt-1">
-                  Курс BTC: {fmtRub(deposit.btc_rate_rub)} ₽/BTC
-                </p>
-              )}
+          {/* Coin tabs + address */}
+          <div>
+            <div className="flex gap-1 mb-3">
+              {DEPOSIT_COINS.map(c => (
+                <button key={c} onClick={() => setDepositTab(c)}
+                  className={`px-3 py-1.5 rounded-lg text-xs font-medium transition-colors ${
+                    depositTab === c
+                      ? 'bg-blue-600 text-white'
+                      : 'bg-gray-100 dark:bg-gray-700 text-gray-600 dark:text-gray-300 hover:bg-gray-200 dark:hover:bg-gray-600'
+                  }`}>
+                  {c}
+                </button>
+              ))}
             </div>
-          )}
+            {deposit.wallets?.[depositTab] ? (
+              <div className="p-3 bg-gray-50 dark:bg-gray-900/50 rounded-lg">
+                <p className="text-xs text-gray-500 dark:text-gray-400 mb-1">
+                  Адрес для пополнения ({coinLabel[depositTab]})
+                </p>
+                <code className="text-sm font-mono text-gray-900 dark:text-white break-all">
+                  {deposit.wallets[depositTab]}
+                </code>
+                {deposit.rates?.[depositTab] > 0 && (
+                  <p className="text-xs text-gray-400 dark:text-gray-500 mt-1">
+                    Курс {depositTab}: {fmtRub(deposit.rates[depositTab])} ₽/{depositTab}
+                  </p>
+                )}
+              </div>
+            ) : (
+              <div className="p-3 bg-gray-50 dark:bg-gray-900/50 rounded-lg text-sm text-gray-400 italic">
+                Адрес {depositTab} не настроен администратором.
+              </div>
+            )}
+          </div>
 
           {depositHistory.length > 0 && (
             <div className="mt-4">
@@ -450,17 +601,40 @@ export default function CashierPage() {
           <div className="bg-white dark:bg-gray-800 rounded-2xl shadow-xl w-full max-w-md mx-4 p-6">
             <h2 className="text-lg font-bold text-gray-900 dark:text-white mb-2">Пополнить депозит</h2>
             <p className="text-sm text-gray-500 dark:text-gray-400 mb-4">
-              Отправьте BTC на адрес системы, затем вставьте хеш транзакции ниже.
+              Отправьте криптовалюту на адрес системы, затем вставьте хеш транзакции.
               Сумма будет зачислена в рублях по курсу на момент проверки.
             </p>
-            {deposit?.system_btc_address && (
+
+            {/* Coin selector */}
+            <label className="block text-xs font-medium text-gray-600 dark:text-gray-400 mb-1">Монета</label>
+            <div className="flex gap-2 mb-4">
+              {DEPOSIT_COINS.map(c => (
+                <button key={c} type="button" onClick={() => { setTopupCoin(c); setTopupTxHash(''); }}
+                  className={`flex-1 py-2 rounded-lg text-sm font-medium transition-colors border ${
+                    topupCoin === c
+                      ? 'bg-blue-600 text-white border-blue-600'
+                      : 'border-gray-200 dark:border-gray-600 text-gray-600 dark:text-gray-300 hover:bg-gray-50 dark:hover:bg-gray-700'
+                  }`}>
+                  {c}
+                </button>
+              ))}
+            </div>
+
+            {deposit?.wallets?.[topupCoin] ? (
               <div className="mb-4 p-3 bg-gray-50 dark:bg-gray-900/50 rounded-lg">
-                <p className="text-xs text-gray-500 dark:text-gray-400 mb-1">BTC адрес системы</p>
+                <p className="text-xs text-gray-500 dark:text-gray-400 mb-1">
+                  Адрес системы ({coinLabel[topupCoin]})
+                </p>
                 <code className="text-sm font-mono text-gray-900 dark:text-white break-all">
-                  {deposit.system_btc_address}
+                  {deposit.wallets[topupCoin]}
                 </code>
               </div>
+            ) : (
+              <div className="mb-4 p-3 bg-yellow-50 dark:bg-yellow-900/20 rounded-lg text-sm text-yellow-700 dark:text-yellow-400">
+                Адрес {topupCoin} не настроен. Обратитесь к администратору.
+              </div>
             )}
+
             <label className="block text-xs font-medium text-gray-600 dark:text-gray-400 mb-1">
               Хеш транзакции (64 символа)
             </label>
@@ -474,14 +648,14 @@ export default function CashierPage() {
             <p className="text-xs text-gray-400 mt-1">{topupTxHash.length}/64 символов</p>
             <div className="flex gap-3 mt-5">
               <button
-                onClick={() => setShowTopupModal(false)}
+                onClick={() => { setShowTopupModal(false); setTopupTxHash(''); }}
                 className="flex-1 py-2 border border-gray-200 dark:border-gray-600 rounded-lg text-sm text-gray-600 dark:text-gray-300 hover:bg-gray-50 dark:hover:bg-gray-700 transition-colors"
               >
                 Отмена
               </button>
               <button
                 onClick={handleTopup}
-                disabled={topupLoading || topupTxHash.length !== 64}
+                disabled={topupLoading || topupTxHash.length !== 64 || !deposit?.wallets?.[topupCoin]}
                 className="flex-1 py-2 bg-green-600 text-white rounded-lg text-sm font-medium hover:bg-green-700 disabled:opacity-50 transition-colors"
               >
                 {topupLoading ? 'Проверка...' : 'Проверить и зачислить'}
@@ -525,6 +699,7 @@ export default function CashierPage() {
           </div>
         </div>
       )}
+      </>)}
     </div>
   );
 }

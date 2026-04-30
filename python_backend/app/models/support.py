@@ -25,3 +25,5 @@ class Support(Base):
     deposit = Column(Numeric(14, 2), default=0)
     deposit_paid = Column(Numeric(14, 2), default=0)
     deposit_work = Column(Numeric(14, 2), default=0)
+    tg_id = Column(BigInteger, nullable=True)   # Personal Telegram ID (cashier notifications)
+    team_id = Column(BigInteger, nullable=True) # FK cashier_teams.id
