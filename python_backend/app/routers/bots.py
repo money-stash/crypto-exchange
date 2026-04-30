@@ -470,6 +470,35 @@ async def get_bot_stats(
 # Requisites
 # ---------------------------------------------------------------------------
 
+@router.get("/{bot_id}/requisites")
+async def get_bot_requisites(
+    bot_id: int,
+    type: Optional[str] = None,
+    active_only: bool = True,
+    current_user: Support = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """Return bot_requisites for this bot. Used by frontend for operator dropdown."""
+    await _check_bot_access(bot_id, current_user, db)
+    q = select(BotRequisite).where(BotRequisite.bot_id == bot_id)
+    if active_only:
+        q = q.where(BotRequisite.is_active == True)
+    if type:
+        q = q.where(BotRequisite.type == type.upper())
+    q = q.order_by(BotRequisite.is_default.desc(), BotRequisite.created_at.desc())
+    result = await db.execute(q)
+    reqs = result.scalars().all()
+    return [
+        {
+            "id": r.id, "type": r.type, "address": r.address,
+            "bank_name": r.bank_name, "holder_name": r.holder_name,
+            "label": r.label, "is_active": r.is_active, "is_default": r.is_default,
+            "support_id": r.support_id,
+        }
+        for r in reqs
+    ]
+
+
 @router.post("/{bot_id}/requisites", status_code=201)
 async def create_bot_requisite(
     bot_id: int,

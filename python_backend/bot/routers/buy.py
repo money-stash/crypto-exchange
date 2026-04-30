@@ -1,6 +1,6 @@
 """
 Buy flow: RUB → CRYPTO
-Steps: coin → amount → wallet address → summary → confirm
+Steps: coin → amount → wallet address (with saved options) → summary → confirm
 """
 import logging
 import re
@@ -17,6 +17,7 @@ from aiogram.utils.keyboard import InlineKeyboardBuilder
 
 from bot.states.order_states import BuyStates, OrderChatStates
 from bot.order_service import get_quote, create_order, get_user_ids, BUY_COINS
+from bot.requisite_service import save_requisite, get_requisites
 
 router = Router()
 logger = logging.getLogger(__name__)
@@ -37,6 +38,19 @@ def _amount_keyboard(input_mode: str) -> InlineKeyboardMarkup:
     builder = InlineKeyboardBuilder()
     builder.row(InlineKeyboardButton(text=toggle_label, callback_data="buy_toggle_mode"))
     builder.row(InlineKeyboardButton(text="◀️ Назад", callback_data="buy_back_to_coins"))
+    return builder.as_markup()
+
+
+def _address_keyboard(saved: list[dict], coin: str) -> InlineKeyboardMarkup:
+    builder = InlineKeyboardBuilder()
+    for req in saved:
+        addr = req["value"]
+        short = f"{addr[:6]}...{addr[-6:]}" if len(addr) > 16 else addr
+        builder.row(InlineKeyboardButton(
+            text=f"🔑 {short}",
+            callback_data=f"buy_saved_{req['id']}",
+        ))
+    builder.row(InlineKeyboardButton(text="◀️ Назад", callback_data=f"buy_coin_{coin}"))
     return builder.as_markup()
 
 
@@ -144,7 +158,7 @@ async def buy_amount_entered(message: Message, state: FSMContext, bot_config: di
     try:
         quote = await get_quote(
             bot_id=bot_config["id"],
-            user_id=0,  # не нужен user_id для простого расчёта
+            user_id=0,
             coin=coin,
             dir="BUY",
             amount_coin=value if input_mode == "CRYPTO" else None,
@@ -174,31 +188,86 @@ async def buy_amount_entered(message: Message, state: FSMContext, bot_config: di
         "XMR": " (Monero)",
     }.get(coin, "")
 
+    # Load saved addresses for this coin
+    saved = []
+    try:
+        user_id, _ = await get_user_ids(message.from_user.id, bot_config["id"])
+        saved = await get_requisites(user_id, bot_config["id"], coin, "BUY")
+        await state.update_data(user_id=user_id)
+    except Exception:
+        pass
+
+    if saved:
+        prompt = (
+            f"📬 <b>Адрес {coin}{network_hint}</b>\n\n"
+            f"Выберите сохранённый кошелёк или введите новый адрес, "
+            f"на который будет отправлено {quote['amount_coin']} {coin}:"
+        )
+    else:
+        prompt = (
+            f"📬 <b>Адрес {coin}{network_hint}</b>\n\n"
+            f"Введите адрес кошелька, на который будет отправлено {quote['amount_coin']} {coin}:"
+        )
+
     await message.answer(
-        f"📬 <b>Адрес {coin}{network_hint}</b>\n\n"
-        f"Введите адрес кошелька, на который будет отправлено {quote['amount_coin']} {coin}:",
+        prompt,
         parse_mode="HTML",
-        reply_markup=InlineKeyboardMarkup(inline_keyboard=[
-            [InlineKeyboardButton(text="◀️ Назад", callback_data=f"buy_coin_{coin}")]
-        ]),
+        reply_markup=_address_keyboard(saved, coin),
     )
+
+
+# ── Step 2.5: select saved address ──────────────────────────────────────────
+
+@router.callback_query(lambda c: c.data and c.data.startswith("buy_saved_"), BuyStates.entering_address)
+async def buy_use_saved_address(callback: CallbackQuery, state: FSMContext, bot_config: dict) -> None:
+    req_id = int(callback.data.split("_")[2])
+    data = await state.get_data()
+    coin = data.get("coin", "BTC")
+
+    try:
+        user_id = data.get("user_id")
+        if not user_id:
+            user_id, _ = await get_user_ids(callback.from_user.id, bot_config["id"])
+        saved = await get_requisites(user_id, bot_config["id"], coin, "BUY")
+    except Exception:
+        await callback.answer("Ошибка загрузки реквизита", show_alert=True)
+        return
+
+    address = next((r["value"] for r in saved if r["id"] == req_id), None)
+    if not address:
+        await callback.answer("Реквизит не найден", show_alert=True)
+        return
+
+    await state.update_data(crypto_address=address)
+    await state.set_state(BuyStates.confirming)
+    await callback.message.delete()
+    await _show_buy_summary(callback.message, state)
+    await callback.answer()
 
 
 # ── Step 3: address input ────────────────────────────────────────────────────
 
 @router.message(BuyStates.entering_address)
-async def buy_address_entered(message: Message, state: FSMContext) -> None:
+async def buy_address_entered(message: Message, state: FSMContext, bot_config: dict) -> None:
     address = (message.text or "").strip()
     data = await state.get_data()
     coin = data.get("coin", "BTC")
 
     if not _validate_address(address, coin):
-        await message.answer(
-            f"❌ Некорректный адрес {coin}. Проверьте и введите снова.",
-        )
+        await message.answer(f"❌ Некорректный адрес {coin}. Проверьте и введите снова.")
         return
 
     await state.update_data(crypto_address=address)
+
+    # Save for future reuse
+    try:
+        user_id = data.get("user_id")
+        if not user_id:
+            user_id, _ = await get_user_ids(message.from_user.id, bot_config["id"])
+        await save_requisite(user_id, bot_config["id"], coin, address, "BUY")
+    except Exception as e:
+        logger.warning(f"Failed to save crypto requisite: {e}")
+
     await state.set_state(BuyStates.confirming)
     await _show_buy_summary(message, state)
 
@@ -263,7 +332,6 @@ async def buy_confirm(callback: CallbackQuery, state: FSMContext, bot_config: di
     coin = order["coin"]
     sum_rub = float(order["sum_rub"])
 
-    # Activate order chat mode — user messages now go to deal_messages
     await state.set_state(OrderChatStates.in_order_chat)
     await state.update_data(order_id=order["id"], order_unique_id=unique_id)
 

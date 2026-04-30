@@ -335,11 +335,10 @@ async def cancel_order(
     tg_id = updated_order.get("tg_id")
     unique_id = updated_order.get("unique_id") or order_id
     if bot_id and tg_id:
-        reason_text = f"\n\nПричина: {cancel_reason}" if cancel_reason and cancel_reason != "Отменено оператором" else ""
         await bot_manager.send_message(
             int(bot_id),
             int(tg_id),
-            f"❌ <b>Заявка #{unique_id} отменена.</b>{reason_text}\n\n"
+            f"❌ <b>Заявка #{unique_id} отменена.</b>\n\n"
             f"Если у вас остались вопросы, обратитесь в поддержку.",
             parse_mode="HTML",
         )
@@ -414,6 +413,65 @@ async def take_order(
 
 
 # ---------------------------------------------------------------------------
+# Helpers
+# ---------------------------------------------------------------------------
+
+async def _autosave_bot_requisite(db: AsyncSession, bot_id: int, support_id: int, body: dict, order: dict) -> None:
+    """Save operator-entered requisite to bot_requisites if not already stored."""
+    coin = (order.get("coin") or "").upper()
+
+    entries: list[dict] = []
+
+    if body.get("card_number"):
+        entries.append({
+            "type": "CARD",
+            "address": body["card_number"],
+            "bank_name": body.get("bank_name") or None,
+            "holder_name": body.get("card_holder") or None,
+        })
+    if body.get("sbp_phone"):
+        entries.append({
+            "type": "SBP",
+            "address": body["sbp_phone"],
+            "bank_name": body.get("bank_name") or None,
+            "holder_name": body.get("card_holder") or None,
+        })
+    if body.get("crypto_address") and coin:
+        entries.append({
+            "type": coin,
+            "address": body["crypto_address"],
+            "bank_name": None,
+            "holder_name": None,
+        })
+
+    for entry in entries:
+        try:
+            dup = await db.execute(
+                text("SELECT id FROM bot_requisites WHERE bot_id = :bid AND type = :t AND address = :a LIMIT 1"),
+                {"bid": bot_id, "t": entry["type"], "a": entry["address"]},
+            )
+            if dup.fetchone():
+                continue
+            await db.execute(
+                text("""
+                    INSERT INTO bot_requisites (bot_id, support_id, type, address, bank_name, holder_name, is_active)
+                    VALUES (:bid, :sid, :t, :a, :bank, :holder, 1)
+                """),
+                {
+                    "bid": bot_id,
+                    "sid": support_id,
+                    "t": entry["type"],
+                    "a": entry["address"],
+                    "bank": entry["bank_name"],
+                    "holder": entry["holder_name"],
+                },
+            )
+            await db.commit()
+        except Exception as exc:
+            logger.warning(f"Failed to autosave bot_requisite for bot {bot_id}: {exc}")
+
+
+# ---------------------------------------------------------------------------
 # POST /:id/requisites
 # ---------------------------------------------------------------------------
 
@@ -455,6 +513,11 @@ async def set_order_requisites(
     updated = await db.execute(text(f"{ORDER_SELECT} WHERE o.id = :id"), {"id": order_id})
     updated_order = dict(updated.mappings().one())
     await sio.emit_order_updated(updated_order)
+
+    # Auto-save new requisite to bot_requisites for future reuse
+    bot_id_val = updated_order.get("bot_id")
+    if bot_id_val and isinstance(body, dict):
+        await _autosave_bot_requisite(db, bot_id_val, current_user.id, body, updated_order)
 
     # Уведомить клиента в Telegram об адресе/реквизитах
     try:
@@ -559,6 +622,8 @@ async def send_message(
     current_user: Support = Depends(require_auth),
     db: AsyncSession = Depends(get_db),
 ):
+    if current_user.role == "CASHIER":
+        raise HTTPException(403, "Кассир не может писать клиентам")
     if current_user.role == "OPERATOR" and not current_user.can_write_chat:
         raise HTTPException(403, "Оператору запрещено писать в чат")
 

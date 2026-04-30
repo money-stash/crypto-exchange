@@ -597,6 +597,282 @@ async def topup_my_deposit(
 
 
 # ---------------------------------------------------------------------------
+# Cashier self — simplified orders (no client data)
+# ---------------------------------------------------------------------------
+
+@router.get("/me/orders")
+async def get_my_orders(
+    page: int = Query(1, ge=1),
+    limit: int = Query(20, ge=1, le=100),
+    card_id: Optional[int] = None,
+    current_user: Support = Depends(require_cashier_or_admin),
+    db: AsyncSession = Depends(get_db),
+):
+    """Simplified order list for cashier — no client info, no rate/sum details."""
+    uid = current_user.id
+    params: dict = {"uid": uid, "limit": limit, "offset": (page - 1) * limit}
+    where = "o.cashier_card_id IN (SELECT id FROM cashier_cards WHERE cashier_id = :uid)"
+    if card_id:
+        where += " AND o.cashier_card_id = :card_id"
+        params["card_id"] = card_id
+
+    rows = await db.execute(text(f"""
+        SELECT
+            o.id,
+            o.unique_id,
+            o.coin,
+            o.dir,
+            o.amount_coin,
+            o.completed_at,
+            cc.card_number,
+            cc.bank_name,
+            cc.id AS card_id
+        FROM orders o
+        LEFT JOIN cashier_cards cc ON cc.id = o.cashier_card_id
+        WHERE {where}
+        ORDER BY o.created_at DESC
+        LIMIT :limit OFFSET :offset
+    """), params)
+
+    orders = []
+    for r in rows:
+        d = dict(r._mapping)
+        # Mask card number — show only last 4 digits
+        cn = d.get("card_number") or ""
+        d["card_masked"] = f"****{cn[-4:]}" if len(cn) >= 4 else cn
+        del d["card_number"]
+        orders.append(d)
+
+    count_row = await db.execute(
+        text(f"SELECT COUNT(*) FROM orders o WHERE {where}"),
+        {k: v for k, v in params.items() if k not in ("limit", "offset")},
+    )
+    total = count_row.scalar() or 0
+    return {"orders": orders, "total": total, "pages": max(1, -(-total // limit)), "page": page}
+
+
+# ---------------------------------------------------------------------------
+# Cashier self — payment history per card
+# ---------------------------------------------------------------------------
+
+@router.get("/me/cards/{card_id}/history")
+async def get_my_card_history(
+    card_id: int,
+    page: int = Query(1, ge=1),
+    limit: int = Query(30, ge=1, le=100),
+    current_user: Support = Depends(require_cashier_or_admin),
+    db: AsyncSession = Depends(get_db),
+):
+    """All completed orders for a specific cashier card."""
+    card_row = await db.execute(
+        text("SELECT * FROM cashier_cards WHERE id = :cid AND cashier_id = :uid"),
+        {"cid": card_id, "uid": current_user.id},
+    )
+    card = card_row.mappings().one_or_none()
+    if not card:
+        raise HTTPException(404, "Карта не найдена")
+    card = dict(card)
+
+    params: dict = {"cid": card_id, "limit": limit, "offset": (page - 1) * limit}
+    rows = await db.execute(text("""
+        SELECT
+            o.id,
+            o.unique_id,
+            o.coin,
+            o.dir,
+            o.amount_coin,
+            o.sum_rub,
+            o.completed_at,
+            o.created_at
+        FROM orders o
+        WHERE o.cashier_card_id = :cid AND o.status = 'COMPLETED'
+        ORDER BY o.completed_at DESC
+        LIMIT :limit OFFSET :offset
+    """), params)
+    items = [dict(r._mapping) for r in rows]
+
+    total_row = await db.execute(
+        text("SELECT COUNT(*), COALESCE(SUM(sum_rub), 0), COALESCE(SUM(amount_coin), 0) FROM orders WHERE cashier_card_id = :cid AND status = 'COMPLETED'"),
+        {"cid": card_id},
+    )
+    total_data = total_row.fetchone()
+    total = total_data[0] or 0
+    total_sum_rub = float(total_data[1] or 0)
+    total_amount_coin = float(total_data[2] or 0)
+
+    cn = card.get("card_number") or ""
+    return {
+        "card": {
+            "id": card["id"],
+            "card_masked": f"****{cn[-4:]}" if len(cn) >= 4 else cn,
+            "bank_name": card.get("bank_name"),
+            "card_holder": card.get("card_holder"),
+            "current_volume": float(card.get("current_volume") or 0),
+            "total_volume_limit": float(card.get("total_volume_limit") or 0),
+        },
+        "history": items,
+        "total": total,
+        "total_sum_rub": total_sum_rub,
+        "total_amount_coin": total_amount_coin,
+        "pages": max(1, -(-total // limit)),
+        "page": page,
+    }
+
+
+# ---------------------------------------------------------------------------
+# Cashier self — chat with manager
+# ---------------------------------------------------------------------------
+
+async def _cashier_manager_id(db: AsyncSession, cashier_id: int) -> int:
+    """Get assigned manager for cashier, fallback to first SUPERADMIN."""
+    row = await db.execute(
+        text("SELECT manager_id FROM supports WHERE id = :id AND role = 'CASHIER'"),
+        {"id": cashier_id},
+    )
+    rec = row.fetchone()
+    if rec and rec[0]:
+        return int(rec[0])
+    fallback = await db.execute(text(
+        "SELECT id FROM supports WHERE role IN ('MANAGER','SUPERADMIN') AND is_active = 1 ORDER BY id ASC LIMIT 1"
+    ))
+    f = fallback.fetchone()
+    if f:
+        return int(f[0])
+    raise HTTPException(409, "Нет доступных менеджеров")
+
+
+@router.get("/me/chat/unread")
+async def get_my_chat_unread(
+    current_user: Support = Depends(require_cashier_or_admin),
+    db: AsyncSession = Depends(get_db),
+):
+    row = await db.execute(text("""
+        SELECT COUNT(*) FROM operator_manager_messages
+        WHERE operator_id = :uid AND is_read_by_operator = 0
+          AND sender_type IN ('MANAGER', 'SUPERADMIN')
+    """), {"uid": current_user.id})
+    return {"count": row.scalar() or 0}
+
+
+@router.get("/me/chat")
+async def get_my_chat(
+    limit: int = Query(200, ge=1, le=500),
+    offset: int = Query(0, ge=0),
+    current_user: Support = Depends(require_cashier_or_admin),
+    db: AsyncSession = Depends(get_db),
+):
+    manager_id = await _cashier_manager_id(db, current_user.id)
+    rows = await db.execute(text("""
+        SELECT omm.id, omm.operator_id AS cashier_id, omm.manager_id,
+               omm.sender_type, omm.sender_id, omm.message,
+               omm.created_at, omm.is_read_by_operator AS is_read_by_cashier,
+               omm.is_read_by_manager,
+               s.login AS sender_login
+        FROM operator_manager_messages omm
+        LEFT JOIN supports s ON s.id = omm.sender_id
+        WHERE omm.operator_id = :uid
+        ORDER BY omm.created_at ASC, omm.id ASC
+        LIMIT :limit OFFSET :offset
+    """), {"uid": current_user.id, "limit": limit, "offset": offset})
+    return {"messages": [dict(r._mapping) for r in rows], "manager_id": manager_id}
+
+
+@router.post("/me/chat")
+async def send_to_manager(
+    body: dict,
+    current_user: Support = Depends(require_cashier_or_admin),
+    db: AsyncSession = Depends(get_db),
+):
+    text_msg = (body.get("message") or "").strip()
+    if not text_msg:
+        raise HTTPException(400, "Сообщение не может быть пустым")
+
+    manager_id = await _cashier_manager_id(db, current_user.id)
+
+    result = await db.execute(text("""
+        INSERT INTO operator_manager_messages
+            (operator_id, manager_id, sender_type, sender_id, message,
+             is_read_by_operator, is_read_by_manager)
+        VALUES (:uid, :mid, 'CASHIER', :sid, :msg, 1, 0)
+    """), {"uid": current_user.id, "mid": manager_id, "sid": current_user.id, "msg": text_msg})
+    await db.commit()
+    msg_id = result.lastrowid
+
+    row = await db.execute(text("""
+        SELECT omm.id, omm.operator_id AS cashier_id, omm.manager_id,
+               omm.sender_type, omm.sender_id, omm.message,
+               omm.created_at, omm.is_read_by_operator AS is_read_by_cashier,
+               omm.is_read_by_manager, s.login AS sender_login
+        FROM operator_manager_messages omm
+        LEFT JOIN supports s ON s.id = omm.sender_id
+        WHERE omm.id = :id
+    """), {"id": msg_id})
+    msg = dict(row.fetchone()._mapping)
+
+    import app.socket.socket_service as sio
+    await sio.emit_operator_manager_message(current_user.id, manager_id, msg)
+    return msg
+
+
+@router.post("/me/chat/read")
+async def mark_my_chat_read(
+    current_user: Support = Depends(require_cashier_or_admin),
+    db: AsyncSession = Depends(get_db),
+):
+    result = await db.execute(text("""
+        UPDATE operator_manager_messages
+        SET is_read_by_operator = 1
+        WHERE operator_id = :uid AND is_read_by_operator = 0
+          AND sender_type IN ('MANAGER', 'SUPERADMIN')
+    """), {"uid": current_user.id})
+    await db.commit()
+    return {"success": True, "marked": result.rowcount}
+
+
+# ---------------------------------------------------------------------------
+# Superadmin/Manager — cashier chat
+# ---------------------------------------------------------------------------
+
+require_manager_or_admin = require_roles("SUPERADMIN", "MANAGER")
+
+
+@router.get("/chats")
+async def list_cashier_chats(
+    current_user: Support = Depends(require_manager_or_admin),
+    db: AsyncSession = Depends(get_db),
+):
+    """List all cashier-manager chat threads (for manager panel)."""
+    rows = await db.execute(text("""
+        SELECT
+            c.id AS cashier_id,
+            c.login AS cashier_login,
+            c.is_active,
+            m.id AS manager_id,
+            m.login AS manager_login,
+            lm.message AS last_message,
+            lm.sender_type AS last_sender_type,
+            lm.created_at AS last_message_at,
+            COALESCE(agg.unread_for_manager, 0) AS unread_for_manager,
+            COALESCE(agg.unread_for_cashier, 0) AS unread_for_cashier
+        FROM supports c
+        LEFT JOIN supports m ON m.id = c.manager_id
+        LEFT JOIN (
+            SELECT
+                mm.operator_id,
+                MAX(mm.id) AS last_id,
+                SUM(CASE WHEN mm.is_read_by_manager = 0 AND mm.sender_type = 'CASHIER' THEN 1 ELSE 0 END) AS unread_for_manager,
+                SUM(CASE WHEN mm.is_read_by_operator = 0 AND mm.sender_type IN ('MANAGER','SUPERADMIN') THEN 1 ELSE 0 END) AS unread_for_cashier
+            FROM operator_manager_messages mm
+            GROUP BY mm.operator_id
+        ) agg ON agg.operator_id = c.id
+        LEFT JOIN operator_manager_messages lm ON lm.id = agg.last_id
+        WHERE c.role = 'CASHIER'
+        ORDER BY unread_for_manager DESC, lm.created_at DESC, c.login ASC
+    """))
+    return {"chats": [dict(r._mapping) for r in rows]}
+
+
+# ---------------------------------------------------------------------------
 # Superadmin — individual cashier management (/{cashier_id} AFTER /me/...)
 # ---------------------------------------------------------------------------
 
@@ -762,6 +1038,87 @@ async def admin_adjust_cashier_deposit(
         )
 
     return {"success": True, "adjusted_rub": body.amount_rub}
+
+
+@router.get("/{cashier_id}/chat")
+async def get_cashier_chat(
+    cashier_id: int,
+    limit: int = Query(200, ge=1, le=500),
+    offset: int = Query(0, ge=0),
+    current_user: Support = Depends(require_manager_or_admin),
+    db: AsyncSession = Depends(get_db),
+):
+    """Manager reads chat with a specific cashier."""
+    rows = await db.execute(text("""
+        SELECT omm.id, omm.operator_id AS cashier_id, omm.manager_id,
+               omm.sender_type, omm.sender_id, omm.message,
+               omm.created_at, omm.is_read_by_operator AS is_read_by_cashier,
+               omm.is_read_by_manager, s.login AS sender_login
+        FROM operator_manager_messages omm
+        LEFT JOIN supports s ON s.id = omm.sender_id
+        WHERE omm.operator_id = :cid
+        ORDER BY omm.created_at ASC, omm.id ASC
+        LIMIT :limit OFFSET :offset
+    """), {"cid": cashier_id, "limit": limit, "offset": offset})
+    return {"messages": [dict(r._mapping) for r in rows]}
+
+
+@router.post("/{cashier_id}/chat")
+async def send_to_cashier(
+    cashier_id: int,
+    body: dict,
+    current_user: Support = Depends(require_manager_or_admin),
+    db: AsyncSession = Depends(get_db),
+):
+    """Manager sends a message to a cashier."""
+    text_msg = (body.get("message") or "").strip()
+    if not text_msg:
+        raise HTTPException(400, "Сообщение не может быть пустым")
+
+    result = await db.execute(text("""
+        INSERT INTO operator_manager_messages
+            (operator_id, manager_id, sender_type, sender_id, message,
+             is_read_by_operator, is_read_by_manager)
+        VALUES (:cid, :mid, :stype, :sid, :msg, 0, 1)
+    """), {
+        "cid": cashier_id,
+        "mid": current_user.id,
+        "stype": "SUPERADMIN" if current_user.role == "SUPERADMIN" else "MANAGER",
+        "sid": current_user.id,
+        "msg": text_msg,
+    })
+    await db.commit()
+    msg_id = result.lastrowid
+
+    row = await db.execute(text("""
+        SELECT omm.id, omm.operator_id AS cashier_id, omm.manager_id,
+               omm.sender_type, omm.sender_id, omm.message,
+               omm.created_at, omm.is_read_by_operator AS is_read_by_cashier,
+               omm.is_read_by_manager, s.login AS sender_login
+        FROM operator_manager_messages omm
+        LEFT JOIN supports s ON s.id = omm.sender_id
+        WHERE omm.id = :id
+    """), {"id": msg_id})
+    msg = dict(row.fetchone()._mapping)
+
+    import app.socket.socket_service as sio
+    await sio.emit_operator_manager_message(cashier_id, current_user.id, msg)
+    return msg
+
+
+@router.post("/{cashier_id}/chat/read")
+async def mark_cashier_chat_read(
+    cashier_id: int,
+    current_user: Support = Depends(require_manager_or_admin),
+    db: AsyncSession = Depends(get_db),
+):
+    result = await db.execute(text("""
+        UPDATE operator_manager_messages
+        SET is_read_by_manager = 1
+        WHERE operator_id = :cid AND is_read_by_manager = 0 AND sender_type = 'CASHIER'
+    """), {"cid": cashier_id})
+    await db.commit()
+    return {"success": True, "marked": result.rowcount}
 
 
 @router.patch("/{cashier_id}/cards/{card_id}/extend-limit")

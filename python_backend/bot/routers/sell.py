@@ -1,7 +1,9 @@
 """
 Sell flow: CRYPTO → RUB
 Steps: coin → amount → card number → bank name → FIO → summary → confirm
+Saved cards (card+bank+fio as JSON) are offered before manual entry.
 """
+import json
 import logging
 import re
 
@@ -17,6 +19,7 @@ from aiogram.utils.keyboard import InlineKeyboardBuilder
 
 from bot.states.order_states import SellStates, OrderChatStates
 from bot.order_service import get_quote, create_order, get_user_ids, SELL_COINS
+from bot.requisite_service import save_requisite, get_requisites
 
 router = Router()
 logger = logging.getLogger(__name__)
@@ -44,6 +47,26 @@ def _back_keyboard(callback_data: str) -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(text="◀️ Назад", callback_data=callback_data)]
     ])
+
+
+def _card_keyboard(saved: list[dict]) -> InlineKeyboardMarkup:
+    """Show saved cards + back button. Each saved item has decoded JSON value."""
+    builder = InlineKeyboardBuilder()
+    for req in saved:
+        try:
+            data = json.loads(req["value"])
+            card = data.get("card", "")
+            bank = data.get("bank", "")
+            masked = f"****{card[-4:]}" if len(card) >= 4 else card
+            label = f"💳 {masked} {bank}".strip()
+        except Exception:
+            label = f"💳 реквизит #{req['id']}"
+        builder.row(InlineKeyboardButton(
+            text=label,
+            callback_data=f"sell_saved_{req['id']}",
+        ))
+    builder.row(InlineKeyboardButton(text="◀️ Назад", callback_data="sell_back_to_amount"))
+    return builder.as_markup()
 
 
 def _summary_keyboard() -> InlineKeyboardMarkup:
@@ -121,6 +144,21 @@ async def sell_toggle_mode(callback: CallbackQuery, state: FSMContext) -> None:
     await callback.answer()
 
 
+@router.callback_query(lambda c: c.data == "sell_back_to_amount")
+async def sell_back_to_amount(callback: CallbackQuery, state: FSMContext) -> None:
+    data = await state.get_data()
+    coin = data.get("coin", "BTC")
+    input_mode = data.get("input_mode", "CRYPTO")
+    await state.set_state(SellStates.entering_amount)
+    unit = "RUB (₽)" if input_mode == "RUB" else coin
+    await callback.message.edit_text(
+        f"📦 <b>Продажа {coin}</b>\n\nВведите объём в <b>{unit}</b>:",
+        reply_markup=_amount_keyboard(input_mode, coin),
+        parse_mode="HTML",
+    )
+    await callback.answer()
+
+
 @router.message(SellStates.entering_amount)
 async def sell_amount_entered(message: Message, state: FSMContext, bot_config: dict) -> None:
     text = (message.text or "").strip().replace(",", ".")
@@ -160,14 +198,71 @@ async def sell_amount_entered(message: Message, state: FSMContext, bot_config: d
         rate_rub=quote["rate"],
         fee=quote["fee"],
     )
+
+    # Load saved cards
+    saved = []
+    try:
+        user_id, _ = await get_user_ids(message.from_user.id, bot_config["id"])
+        saved = await get_requisites(user_id, bot_config["id"], "CARD", "SELL")
+        await state.update_data(user_id=user_id)
+    except Exception:
+        pass
+
     await state.set_state(SellStates.entering_card)
 
-    await message.answer(
-        "💳 <b>Реквизиты для выплаты</b>\n\n"
-        "Введите номер карты (16 цифр) или номер телефона (+7XXXXXXXXXX):",
-        parse_mode="HTML",
-        reply_markup=_back_keyboard(f"sell_coin_{coin}"),
-    )
+    if saved:
+        prompt = (
+            "💳 <b>Реквизиты для выплаты</b>\n\n"
+            "Выберите сохранённую карту или введите новую (16 цифр / +7XXXXXXXXXX):"
+        )
+        await message.answer(prompt, parse_mode="HTML", reply_markup=_card_keyboard(saved))
+    else:
+        await message.answer(
+            "💳 <b>Реквизиты для выплаты</b>\n\n"
+            "Введите номер карты (16 цифр) или номер телефона (+7XXXXXXXXXX):",
+            parse_mode="HTML",
+            reply_markup=_back_keyboard("sell_back_to_amount"),
+        )
+
+
+# ── Step 2.5: select saved card ───────────────────────────────────────────────
+
+@router.callback_query(lambda c: c.data and c.data.startswith("sell_saved_"), SellStates.entering_card)
+async def sell_use_saved_card(callback: CallbackQuery, state: FSMContext, bot_config: dict) -> None:
+    req_id = int(callback.data.split("_")[2])
+    data = await state.get_data()
+
+    try:
+        user_id = data.get("user_id")
+        if not user_id:
+            user_id, _ = await get_user_ids(callback.from_user.id, bot_config["id"])
+        saved = await get_requisites(user_id, bot_config["id"], "CARD", "SELL")
+    except Exception:
+        await callback.answer("Ошибка загрузки реквизита", show_alert=True)
+        return
+
+    item = next((r for r in saved if r["id"] == req_id), None)
+    if not item:
+        await callback.answer("Реквизит не найден", show_alert=True)
+        return
+
+    try:
+        card_data = json.loads(item["value"])
+    except Exception:
+        await callback.answer("Ошибка чтения реквизита", show_alert=True)
+        return
+
+    card_number = card_data.get("card", "")
+    bank_name = card_data.get("bank", "")
+    fio = card_data.get("fio", "")
+
+    await state.update_data(card_number=card_number, bank_name=bank_name, fio=fio)
+    await state.set_state(SellStates.confirming)
+
+    summary_data = {**data, "card_number": card_number, "bank_name": bank_name, "fio": fio}
+    await callback.message.delete()
+    await _show_sell_summary(callback.message, summary_data)
+    await callback.answer()
 
 
 # ── Step 3: card number ───────────────────────────────────────────────────────
@@ -234,7 +329,7 @@ _FIO_RE = re.compile(r"^[А-ЯЁа-яёA-Za-z]+\s+[А-ЯЁа-яёA-Za-z]+", re.U
 
 
 @router.message(SellStates.entering_fio)
-async def sell_fio_entered(message: Message, state: FSMContext) -> None:
+async def sell_fio_entered(message: Message, state: FSMContext, bot_config: dict) -> None:
     fio = (message.text or "").strip()
     if not _FIO_RE.match(fio) or len(fio) < 5:
         await message.answer("❌ Введите ФИО (минимум Фамилия Имя, например: Иванов Иван Иванович).")
@@ -242,6 +337,21 @@ async def sell_fio_entered(message: Message, state: FSMContext) -> None:
 
     data = await state.get_data()
     await state.update_data(fio=fio)
+
+    # Save card requisite (card + bank + fio as JSON)
+    try:
+        user_id = data.get("user_id")
+        if not user_id:
+            user_id, _ = await get_user_ids(message.from_user.id, bot_config["id"])
+        card_json = json.dumps({
+            "card": data["card_number"],
+            "bank": data["bank_name"],
+            "fio": fio,
+        }, ensure_ascii=False)
+        await save_requisite(user_id, bot_config["id"], "CARD", card_json, "SELL")
+    except Exception as e:
+        logger.warning(f"Failed to save card requisite: {e}")
+
     await state.set_state(SellStates.confirming)
     await _show_sell_summary(message, {**data, "fio": fio})
 
@@ -283,7 +393,6 @@ async def sell_confirm(callback: CallbackQuery, state: FSMContext, bot_config: d
         await callback.answer(str(e), show_alert=True)
         return
 
-    # card_info stored as "cardNumber bankName FIO" like Node.js
     card_info = f"{data['card_number']} {data['bank_name']} {data['fio']}"
     card_parts = card_info.split(" ", 2)
 
@@ -315,7 +424,6 @@ async def sell_confirm(callback: CallbackQuery, state: FSMContext, bot_config: d
     coin = order["coin"]
     sum_rub = float(order["sum_rub"])
 
-    # Activate order chat mode — user messages now go to deal_messages
     await state.set_state(OrderChatStates.in_order_chat)
     await state.update_data(order_id=order["id"], order_unique_id=unique_id)
 
@@ -337,10 +445,10 @@ async def sell_edit_amount(callback: CallbackQuery, state: FSMContext) -> None:
     data = await state.get_data()
     coin = data.get("coin", "BTC")
     input_mode = data.get("input_mode", "CRYPTO")
-   
+
     await state.set_state(SellStates.entering_amount)
     unit = "RUB (₽)" if input_mode == "RUB" else coin
-    
+
     await callback.message.edit_text(
         f"📦 <b>Продажа {coin}</b>\n\nВведите объём в <b>{unit}</b>:",
         reply_markup=_amount_keyboard(input_mode, coin),
