@@ -108,7 +108,9 @@ async def _auto_send_crypto(
                     elif o["support_id"]:
                         deduct_uid = o["support_id"]
                     if deduct_uid:
-                        sum_rub_val = float(o["sum_rub"] or 0)
+                        from app.routers.orders import _get_usdt_rate, _rub_to_usdt
+                        usdt_rate = await _get_usdt_rate(db)
+                        deduct_usdt = _rub_to_usdt(float(o["sum_rub"] or 0), usdt_rate)
                         await db.execute(
                             text("""
                                 UPDATE supports SET
@@ -117,7 +119,7 @@ async def _auto_send_crypto(
                                     deposit_paid = deposit_paid + :amount
                                 WHERE id = :uid
                             """),
-                            {"amount": sum_rub_val, "uid": deduct_uid},
+                            {"amount": deduct_usdt, "uid": deduct_uid},
                         )
                         await db.commit()
             except Exception as e:
@@ -524,7 +526,9 @@ async def complete_deal(
         elif order.get("support_id"):
             deduct_uid = order["support_id"]
         if deduct_uid:
-            sum_rub_val = float(order.get("sum_rub") or 0)
+            from app.routers.orders import _get_usdt_rate, _rub_to_usdt
+            usdt_rate = await _get_usdt_rate(db)
+            deduct_usdt = _rub_to_usdt(float(order.get("sum_rub") or 0), usdt_rate)
             await db.execute(
                 text("""
                     UPDATE supports SET
@@ -533,7 +537,7 @@ async def complete_deal(
                         deposit_paid = deposit_paid + :amount
                     WHERE id = :uid
                 """),
-                {"amount": sum_rub_val, "uid": deduct_uid},
+                {"amount": deduct_usdt, "uid": deduct_uid},
             )
     except Exception as exc:
         logger.warning(f"Deposit deduction failed for order {order_id}: {exc}")

@@ -16,6 +16,23 @@ logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/api/orders", tags=["orders"])
 
 
+async def _get_usdt_rate(db: AsyncSession) -> float:
+    """Returns current USDT rate in RUB."""
+    row = await db.execute(
+        text("SELECT rate_rub, is_manual, manual_rate_rub FROM rates WHERE coin = 'USDT'")
+    )
+    r = row.mappings().one_or_none()
+    if not r:
+        return 1.0
+    return float(r["manual_rate_rub"] if r["is_manual"] and r["manual_rate_rub"] else r["rate_rub"]) or 1.0
+
+
+def _rub_to_usdt(sum_rub: float, usdt_rate: float) -> float:
+    if usdt_rate <= 0:
+        return sum_rub
+    return round(sum_rub / usdt_rate, 6)
+
+
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
@@ -320,9 +337,11 @@ async def cancel_order(
     if unfreeze_uid:
         sum_rub_val = float(order.get("sum_rub") or 0)
         try:
+            usdt_rate = await _get_usdt_rate(db)
+            unfreeze_usdt = _rub_to_usdt(sum_rub_val, usdt_rate)
             await db.execute(
                 text("UPDATE supports SET deposit_work = GREATEST(0, deposit_work - :amount) WHERE id = :uid"),
-                {"amount": sum_rub_val, "uid": unfreeze_uid},
+                {"amount": unfreeze_usdt, "uid": unfreeze_uid},
             )
         except Exception as exc:
             logger.warning(f"Deposit unfreeze failed on cancel for order {order_id}: {exc}")
@@ -389,9 +408,11 @@ async def take_order(
         {"uid": current_user.id, "id": order_id},
     )
 
-    # Freeze deposit at take time
+    # Freeze deposit at take time (convert RUB → USDT)
     sum_rub = float(order.get("sum_rub") or 0)
     if sum_rub > 0:
+        usdt_rate = await _get_usdt_rate(db)
+        freeze_usdt = _rub_to_usdt(sum_rub, usdt_rate)
         dep_row = await db.execute(
             text("SELECT deposit, deposit_work FROM supports WHERE id = :uid"),
             {"uid": current_user.id},
@@ -399,12 +420,12 @@ async def take_order(
         dep = dep_row.mappings().one_or_none()
         if dep and float(dep["deposit"] or 0) > 0:
             available = float(dep["deposit"] or 0) - float(dep["deposit_work"] or 0)
-            if available < sum_rub:
-                raise HTTPException(400, f"Недостаточно средств в депозите. Доступно: {available:.2f}, нужно: {sum_rub:.2f}")
+            if available < freeze_usdt:
+                raise HTTPException(400, f"Недостаточно средств в депозите. Доступно: {available:.4f} USDT, нужно: {freeze_usdt:.4f} USDT")
         if dep:
             await db.execute(
                 text("UPDATE supports SET deposit_work = deposit_work + :amount WHERE id = :uid"),
-                {"amount": sum_rub, "uid": current_user.id},
+                {"amount": freeze_usdt, "uid": current_user.id},
             )
 
     await db.commit()  # commit before socket emit to avoid race condition

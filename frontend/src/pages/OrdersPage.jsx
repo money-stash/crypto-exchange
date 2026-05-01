@@ -934,7 +934,7 @@ const handleWorkTabChange = (tab) => {
               <Wallet className="w-3.5 h-3.5 text-blue-500 flex-shrink-0" />
               <span className="text-gray-500">Депозит:</span>
               <span className="font-semibold text-gray-800 dark:text-gray-200">
-                {loading || !operatorStats ? '—' : `${formatUsdtCompact(operatorStats.deposit_paid || 0)} USDT`}
+                {loading || !operatorStats ? '—' : `${formatUsdtCompact(operatorStats.deposit || 0)} USDT`}
               </span>
             </div>
             <div className="w-px h-3.5 bg-gray-200 dark:bg-gray-700" />
@@ -950,7 +950,7 @@ const handleWorkTabChange = (tab) => {
               <TrendingUp className="w-3.5 h-3.5 text-green-500 flex-shrink-0" />
               <span className="text-gray-500">Доступно:</span>
               <span className="font-semibold text-gray-800 dark:text-gray-200">
-                {loading || !operatorStats ? '—' : `${formatUsdtCompact(Math.max(0, Number((operatorStats.available_deposit_usdt ?? operatorStats.available_deposit) || 0)))} USDT`}
+                {loading || !operatorStats ? '—' : `${formatUsdtCompact(Math.max(0, (operatorStats.deposit || 0) - (operatorStats.deposit_work || 0)))} USDT`}
               </span>
             </div>
             <div className="w-px h-3.5 bg-gray-200 dark:bg-gray-700" />
