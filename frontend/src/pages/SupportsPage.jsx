@@ -62,8 +62,7 @@ const SupportsPage = () => {
   const [showEditModal, setShowEditModal] = useState(false);
   const [editingDeposits, setEditingDeposits] = useState(false);
   const [depositValues, setDepositValues] = useState({
-    deposit_paid: 0,
-    deposit_work: 0
+    deposit: 0,
   });
   const [editingMaxOrders, setEditingMaxOrders] = useState(false);
   const [maxOrdersValue, setMaxOrdersValue] = useState(10);
@@ -83,8 +82,7 @@ const SupportsPage = () => {
     can_write_chat: true,
     can_cancel_order: true,
     can_edit_requisites: true,
-    deposit_paid: 0,
-    deposit_work: 0,
+    deposit: 0,
     rate_percent: 0,
     daily_rate_usd: 0,
     per_order_rate_usd: 0
@@ -97,8 +95,7 @@ const SupportsPage = () => {
     can_write_chat: true,
     can_cancel_order: true,
     can_edit_requisites: true,
-    deposit_paid: 0,
-    deposit_work: 0,
+    deposit: 0,
     rate_percent: 0,
     daily_rate_usd: 0,
     per_order_rate_usd: 0,
@@ -199,8 +196,7 @@ const SupportsPage = () => {
       const fullSupport = response.data || response;
       setSelectedSupport(fullSupport);
       setDepositValues({
-        deposit_paid: getSupportDepositPaid(fullSupport),
-        deposit_work: getSupportDepositWork(fullSupport)
+        deposit: parseFloat(fullSupport?.deposit ?? 0) || 0,
       });
       setEditingDeposits(false);
       setDebtCurrentIntent(null);
@@ -344,8 +340,7 @@ const SupportsPage = () => {
         can_write_chat: true,
         can_cancel_order: true,
         can_edit_requisites: true,
-        deposit_paid: 0,
-        deposit_work: 0,
+        deposit: 0,
         rate_percent: 0,
         daily_rate_usd: 0,
         per_order_rate_usd: 0
@@ -397,9 +392,7 @@ const SupportsPage = () => {
       if (selectedSupport) {
         setSelectedSupport(prev => ({
           ...prev,
-          deposit_paid: deposits.deposit_paid,
-          deposit_work: deposits.deposit_work,
-          deposit: deposits.deposit_work
+          deposit: deposits.deposit,
         }));
       }
     } catch (error) {
@@ -420,8 +413,7 @@ const SupportsPage = () => {
         can_write_chat: Boolean(editSupport.can_write_chat),
         can_cancel_order: Boolean(editSupport.can_cancel_order),
         can_edit_requisites: Boolean(editSupport.can_edit_requisites),
-        deposit_paid: editSupport.deposit_paid,
-        deposit_work: editSupport.deposit_work,
+        deposit: editSupport.deposit,
         rate_percent: editSupport.rate_percent
       };
       // Добавляем пароль только если он был указан
@@ -521,8 +513,7 @@ const SupportsPage = () => {
       can_write_chat: Number(support.can_write_chat ?? 1) === 1,
       can_cancel_order: Number(support.can_cancel_order ?? 1) === 1,
       can_edit_requisites: Number(support.can_edit_requisites ?? 1) === 1,
-      deposit_paid: getSupportDepositPaid(support),
-      deposit_work: getSupportDepositWork(support),
+      deposit: parseFloat(support.deposit) || 0,
       rate_percent: getSupportRatePercent(support),
       newPassword: ''
     });
@@ -862,11 +853,11 @@ const SupportsPage = () => {
                 <div className="text-gray-500 dark:text-gray-400">
                   Выполнено: {support.completed_orders || 0}
                 </div>
-                <div className="text-green-600 dark:text-green-400 font-medium">
-                  Рабочий: {getSupportDepositWork(support).toFixed(4)} USDT
-                </div>
                 <div className="text-blue-600 dark:text-blue-400 font-medium">
-                  Внесенный: {getSupportDepositPaid(support).toFixed(4)} USDT
+                  Депозит: {parseFloat(support.deposit || 0).toFixed(4)} USDT
+                </div>
+                <div className="text-green-600 dark:text-green-400 font-medium">
+                  Заморожено: {parseFloat(support.deposit_work || 0).toFixed(4)} USDT
                 </div>
                 <div className="text-indigo-600 dark:text-indigo-400 font-medium">
                   Rate: {getSupportRatePercent(support).toFixed(2)}%
@@ -967,11 +958,11 @@ const SupportsPage = () => {
               </div>
               <div>
                 <span className="text-gray-500 dark:text-gray-400">Депозиты:</span>
-                <div className="text-green-600 dark:text-green-400 font-medium">
-                  Рабочий: {getSupportDepositWork(support).toFixed(4)} USDT
-                </div>
                 <div className="text-blue-600 dark:text-blue-400 font-medium">
-                  Внесенный: {getSupportDepositPaid(support).toFixed(4)} USDT
+                  Депозит: {parseFloat(support.deposit || 0).toFixed(4)} USDT
+                </div>
+                <div className="text-green-600 dark:text-green-400 font-medium">
+                  Заморожено: {parseFloat(support.deposit_work || 0).toFixed(4)} USDT
                 </div>
                 <div className="text-indigo-600 dark:text-indigo-400 font-medium">
                   Rate: {getSupportRatePercent(support).toFixed(2)}%
@@ -1175,22 +1166,8 @@ const SupportsPage = () => {
                   type="number"
                   min="0"
                   step="0.0001"
-                  value={newSupport.deposit_paid}
-                  onChange={(e) => setNewSupport(prev => ({ ...prev, deposit_paid: parseFloat(e.target.value) || 0 }))}
-                  className="form-input w-full"
-                  placeholder="0.00"
-                />
-              </div>
-              <div>
-                <label className="form-label mb-2">
-                  Рабочий депозит (USDT)
-                </label>
-                <input
-                  type="number"
-                  min="0"
-                  step="0.0001"
-                  value={newSupport.deposit_work}
-                  onChange={(e) => setNewSupport(prev => ({ ...prev, deposit_work: parseFloat(e.target.value) || 0 }))}
+                  value={newSupport.deposit}
+                  onChange={(e) => setNewSupport(prev => ({ ...prev, deposit: parseFloat(e.target.value) || 0 }))}
                   className="form-input w-full"
                   placeholder="0.00"
                 />
@@ -1401,22 +1378,8 @@ const SupportsPage = () => {
                   type="number"
                   min="0"
                   step="0.0001"
-                  value={editSupport.deposit_paid}
-                  onChange={(e) => setEditSupport(prev => ({ ...prev, deposit_paid: parseFloat(e.target.value) || 0 }))}
-                  className="form-input w-full"
-                  placeholder="0.00"
-                />
-              </div>
-              <div>
-                <label className="form-label mb-2">
-                  Рабочий депозит (USDT)
-                </label>
-                <input
-                  type="number"
-                  min="0"
-                  step="0.0001"
-                  value={editSupport.deposit_work}
-                  onChange={(e) => setEditSupport(prev => ({ ...prev, deposit_work: parseFloat(e.target.value) || 0 }))}
+                  value={editSupport.deposit}
+                  onChange={(e) => setEditSupport(prev => ({ ...prev, deposit: parseFloat(e.target.value) || 0 }))}
                   className="form-input w-full"
                   placeholder="0.00"
                 />
@@ -1587,26 +1550,15 @@ const SupportsPage = () => {
                     {editingDeposits ? (
                       <div className="mt-2 space-y-2">
                         <div className="flex items-center">
-                          <span className="text-xs text-gray-500 mr-2 w-24">Внесенный</span>
+                          <span className="text-xs text-gray-500 mr-2 w-24">Депозит</span>
                           <input
                             type="number"
                             min="0"
                             step="0.0001"
-                            value={depositValues.deposit_paid}
-                            onChange={(e) => setDepositValues(prev => ({ ...prev, deposit_paid: parseFloat(e.target.value) || 0 }))}
+                            value={depositValues.deposit}
+                            onChange={(e) => setDepositValues(prev => ({ ...prev, deposit: parseFloat(e.target.value) || 0 }))}
                             className="w-24 px-2 py-1 text-xs border border-gray-300 rounded"
                             autoFocus
-                          />
-                        </div>
-                        <div className="flex items-center">
-                          <span className="text-xs text-gray-500 mr-2 w-24">Рабочий</span>
-                          <input
-                            type="number"
-                            min="0"
-                            step="0.0001"
-                            value={depositValues.deposit_work}
-                            onChange={(e) => setDepositValues(prev => ({ ...prev, deposit_work: parseFloat(e.target.value) || 0 }))}
-                            className="w-24 px-2 py-1 text-xs border border-gray-300 rounded"
                           />
                         </div>
                         <div className="flex items-center mt-1">
@@ -1619,10 +1571,7 @@ const SupportsPage = () => {
                           <button
                             onClick={() => {
                               setEditingDeposits(false);
-                              setDepositValues({
-                                deposit_paid: getSupportDepositPaid(selectedSupport),
-                                deposit_work: getSupportDepositWork(selectedSupport)
-                              });
+                              setDepositValues({ deposit: parseFloat(selectedSupport.deposit) || 0 });
                             }}
                             className="px-2 py-1 bg-gray-600 text-white text-xs rounded hover:bg-gray-700"
                           >
@@ -1632,8 +1581,8 @@ const SupportsPage = () => {
                       </div>
                     ) : (
                       <div className="ml-2">
-                        <div className="text-blue-600 dark:text-blue-400">Внесенный: {getSupportDepositPaid(selectedSupport).toFixed(4)} USDT</div>
-                        <div className="text-green-600 dark:text-green-400">Рабочий: {getSupportDepositWork(selectedSupport).toFixed(4)} USDT</div>
+                        <div className="text-blue-600 dark:text-blue-400">Депозит: {parseFloat(selectedSupport.deposit || 0).toFixed(4)} USDT</div>
+                        <div className="text-green-600 dark:text-green-400">Заморожено: {parseFloat(selectedSupport.deposit_work || 0).toFixed(4)} USDT</div>
                         <button
                           onClick={() => setEditingDeposits(true)}
                           className="text-xs text-blue-600 dark:text-blue-400 hover:underline mt-1"
