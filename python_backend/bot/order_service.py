@@ -205,13 +205,14 @@ async def create_order(
         )
         order = dict(row.mappings().one())
 
-    # Try auto-assign a cashier card (non-blocking fallback to operator queue)
+    # Try auto-assign a cashier card — only for BUY (RUB → crypto) orders
     auto_assigned = False
     try:
-        from app.services.cashier_service import try_auto_assign_cashier_card
-        auto_assigned = await try_auto_assign_cashier_card(
-            order["id"], float(order["sum_rub"]), bot_id
-        )
+        if order.get("dir") == "BUY":
+            from app.services.cashier_service import try_auto_assign_cashier_card
+            auto_assigned = await try_auto_assign_cashier_card(
+                order["id"], float(order["sum_rub"]), bot_id
+            )
     except Exception as e:
         logger.warning(f"Auto-assign cashier card failed for order {unique_id}: {e}")
 

@@ -188,7 +188,7 @@ async def _find_best_card(sum_rub: float, db: AsyncSession) -> dict | None:
     rows = await db.execute(text("""
         SELECT cc.*
         FROM cashier_cards cc
-        JOIN supports s ON s.id = cc.cashier_id AND s.is_active = 1
+        JOIN supports s ON s.id = cc.cashier_id AND s.is_active = 1 AND s.role = 'CASHIER'
         WHERE cc.is_active = 1
           AND cc.min_amount <= :amount
           AND cc.max_amount >= :amount
