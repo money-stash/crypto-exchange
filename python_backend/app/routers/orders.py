@@ -301,32 +301,31 @@ async def cancel_order(
         {"id": order_id, "reason": cancel_reason},
     )
 
-    # Unfreeze deposit if freeze was applied (freeze happens at AWAITING_HASH transition)
-    if order["status"] == "AWAITING_HASH":
-        unfreeze_uid = None
-        if order.get("cashier_card_id"):
-            try:
-                cc_row = await db.execute(
-                    text("SELECT cashier_id FROM cashier_cards WHERE id = :cid"),
-                    {"cid": order["cashier_card_id"]},
-                )
-                cc = cc_row.mappings().one_or_none()
-                if cc:
-                    unfreeze_uid = cc["cashier_id"]
-            except Exception:
-                pass
-        elif order.get("support_id"):
-            unfreeze_uid = order["support_id"]
+    # Unfreeze deposit on cancel (freeze happens at take time, so always unfreeze if assigned)
+    unfreeze_uid = None
+    if order.get("cashier_card_id"):
+        try:
+            cc_row = await db.execute(
+                text("SELECT cashier_id FROM cashier_cards WHERE id = :cid"),
+                {"cid": order["cashier_card_id"]},
+            )
+            cc = cc_row.mappings().one_or_none()
+            if cc:
+                unfreeze_uid = cc["cashier_id"]
+        except Exception:
+            pass
+    elif order.get("support_id"):
+        unfreeze_uid = order["support_id"]
 
-        if unfreeze_uid:
-            sum_rub_val = float(order.get("sum_rub") or 0)
-            try:
-                await db.execute(
-                    text("UPDATE supports SET deposit_work = GREATEST(0, deposit_work - :amount) WHERE id = :uid"),
-                    {"amount": sum_rub_val, "uid": unfreeze_uid},
-                )
-            except Exception as exc:
-                logger.warning(f"Deposit unfreeze failed on cancel for order {order_id}: {exc}")
+    if unfreeze_uid:
+        sum_rub_val = float(order.get("sum_rub") or 0)
+        try:
+            await db.execute(
+                text("UPDATE supports SET deposit_work = GREATEST(0, deposit_work - :amount) WHERE id = :uid"),
+                {"amount": sum_rub_val, "uid": unfreeze_uid},
+            )
+        except Exception as exc:
+            logger.warning(f"Deposit unfreeze failed on cancel for order {order_id}: {exc}")
 
     updated = await db.execute(
         text(f"{ORDER_SELECT} WHERE o.id = :id"), {"id": order_id}
@@ -389,6 +388,25 @@ async def take_order(
         text("UPDATE orders SET support_id = :uid, status = 'PAYMENT_PENDING', sla_started_at = NOW(), updated_at = NOW() WHERE id = :id"),
         {"uid": current_user.id, "id": order_id},
     )
+
+    # Freeze deposit at take time
+    sum_rub = float(order.get("sum_rub") or 0)
+    if sum_rub > 0:
+        dep_row = await db.execute(
+            text("SELECT deposit, deposit_work FROM supports WHERE id = :uid"),
+            {"uid": current_user.id},
+        )
+        dep = dep_row.mappings().one_or_none()
+        if dep and float(dep["deposit"] or 0) > 0:
+            available = float(dep["deposit"] or 0) - float(dep["deposit_work"] or 0)
+            if available < sum_rub:
+                raise HTTPException(400, f"Недостаточно средств в депозите. Доступно: {available:.2f}, нужно: {sum_rub:.2f}")
+        if dep:
+            await db.execute(
+                text("UPDATE supports SET deposit_work = deposit_work + :amount WHERE id = :uid"),
+                {"amount": sum_rub, "uid": current_user.id},
+            )
+
     await db.commit()  # commit before socket emit to avoid race condition
 
     updated = await db.execute(text(f"{ORDER_SELECT} WHERE o.id = :id"), {"id": order_id})

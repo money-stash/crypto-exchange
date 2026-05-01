@@ -351,39 +351,6 @@ async def confirm_payment(
             # Прибыль = RUB от клиента − потраченные RUB на покупку USDT
             operator_profit_rub = round(sum_rub - received_usdt * usdt_rate_rub, 2)
 
-    # Замораживаем депозит оператора или кассира
-    freeze_uid = None
-    if order.get("cashier_card_id"):
-        cc_row = await db.execute(
-            text("SELECT cashier_id FROM cashier_cards WHERE id = :cid"),
-            {"cid": order["cashier_card_id"]},
-        )
-        cc = cc_row.mappings().one_or_none()
-        if cc:
-            freeze_uid = cc["cashier_id"]
-    elif order.get("support_id"):
-        freeze_uid = order["support_id"]
-
-    if freeze_uid:
-        dep_row = await db.execute(
-            text("SELECT deposit, deposit_work FROM supports WHERE id = :uid"),
-            {"uid": freeze_uid},
-        )
-        dep = dep_row.mappings().one_or_none()
-        if dep and float(dep["deposit"] or 0) > 0:
-            available = float(dep["deposit"] or 0) - float(dep["deposit_work"] or 0)
-            if available < sum_rub:
-                raise HTTPException(
-                    400,
-                    f"Недостаточно средств в депозите. "
-                    f"Доступно: {available:.2f}, нужно: {sum_rub:.2f}"
-                )
-        if dep:
-            await db.execute(
-                text("UPDATE supports SET deposit_work = deposit_work + :amount WHERE id = :uid"),
-                {"amount": sum_rub, "uid": freeze_uid},
-            )
-
     # Обновляем заявку
     update_fields = "status = 'AWAITING_HASH', updated_at = NOW()"
     params: dict = {"id": order_id}
