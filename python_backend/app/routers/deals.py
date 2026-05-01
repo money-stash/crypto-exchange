@@ -88,26 +88,38 @@ async def _auto_send_crypto(
             )
             updated_order = dict(updated_row.mappings().one())
 
-            # Списываем с депозита кассира (заморозка → постоянное списание)
+            # Списываем с депозита кассира/оператора (заморозка → постоянное списание)
             try:
                 order_row = await db.execute(
                     text("SELECT support_id, sum_rub, cashier_card_id FROM orders WHERE id = :id"),
                     {"id": order_id},
                 )
                 o = order_row.mappings().one_or_none()
-                if o and o["cashier_card_id"] and o["support_id"]:
-                    sum_rub_val = float(o["sum_rub"] or 0)
-                    await db.execute(
-                        text("""
-                            UPDATE supports SET
-                                deposit      = GREATEST(0, deposit - :amount),
-                                deposit_work = GREATEST(0, deposit_work - :amount),
-                                deposit_paid = deposit_paid + :amount
-                            WHERE id = :uid AND role = 'CASHIER'
-                        """),
-                        {"amount": sum_rub_val, "uid": o["support_id"]},
-                    )
-                    await db.commit()
+                if o:
+                    deduct_uid = None
+                    if o["cashier_card_id"]:
+                        cc_row = await db.execute(
+                            text("SELECT cashier_id FROM cashier_cards WHERE id = :cid"),
+                            {"cid": o["cashier_card_id"]},
+                        )
+                        cc = cc_row.mappings().one_or_none()
+                        if cc:
+                            deduct_uid = cc["cashier_id"]
+                    elif o["support_id"]:
+                        deduct_uid = o["support_id"]
+                    if deduct_uid:
+                        sum_rub_val = float(o["sum_rub"] or 0)
+                        await db.execute(
+                            text("""
+                                UPDATE supports SET
+                                    deposit      = GREATEST(0, deposit - :amount),
+                                    deposit_work = GREATEST(0, deposit_work - :amount),
+                                    deposit_paid = deposit_paid + :amount
+                                WHERE id = :uid
+                            """),
+                            {"amount": sum_rub_val, "uid": deduct_uid},
+                        )
+                        await db.commit()
             except Exception as e:
                 logger.warning(f"[AUTO-SEND] Deposit deduction failed for order {order_id}: {e}")
 
@@ -339,25 +351,37 @@ async def confirm_payment(
             # Прибыль = RUB от клиента − потраченные RUB на покупку USDT
             operator_profit_rub = round(sum_rub - received_usdt * usdt_rate_rub, 2)
 
-    # Проверяем и замораживаем депозит кассира (если это авто-выдача заявка)
-    cashier_support_id = order.get("support_id")
-    if order.get("cashier_card_id") and cashier_support_id:
+    # Замораживаем депозит оператора или кассира
+    freeze_uid = None
+    if order.get("cashier_card_id"):
+        cc_row = await db.execute(
+            text("SELECT cashier_id FROM cashier_cards WHERE id = :cid"),
+            {"cid": order["cashier_card_id"]},
+        )
+        cc = cc_row.mappings().one_or_none()
+        if cc:
+            freeze_uid = cc["cashier_id"]
+    elif order.get("support_id"):
+        freeze_uid = order["support_id"]
+
+    if freeze_uid:
         dep_row = await db.execute(
-            text("SELECT deposit, deposit_work FROM supports WHERE id = :uid AND role = 'CASHIER'"),
-            {"uid": cashier_support_id},
+            text("SELECT deposit, deposit_work FROM supports WHERE id = :uid"),
+            {"uid": freeze_uid},
         )
         dep = dep_row.mappings().one_or_none()
-        if dep:
+        if dep and float(dep["deposit"] or 0) > 0:
             available = float(dep["deposit"] or 0) - float(dep["deposit_work"] or 0)
             if available < sum_rub:
                 raise HTTPException(
                     400,
-                    f"Недостаточно средств в депозите кассира. "
-                    f"Доступно: {available:.2f} ₽, нужно: {sum_rub:.2f} ₽"
+                    f"Недостаточно средств в депозите. "
+                    f"Доступно: {available:.2f}, нужно: {sum_rub:.2f}"
                 )
+        if dep:
             await db.execute(
                 text("UPDATE supports SET deposit_work = deposit_work + :amount WHERE id = :uid"),
-                {"amount": sum_rub, "uid": cashier_support_id},
+                {"amount": sum_rub, "uid": freeze_uid},
             )
 
     # Обновляем заявку
@@ -519,9 +543,20 @@ async def complete_deal(
     except Exception as exc:
         logger.warning(f"Cashier volume tracking failed for order {order_id}: {exc}")
 
-    # Deduct from cashier deposit (manual completion path)
-    if order.get("cashier_card_id") and order.get("support_id"):
-        try:
+    # Deduct from cashier/operator deposit (manual completion path)
+    try:
+        deduct_uid = None
+        if order.get("cashier_card_id"):
+            cc_row = await db.execute(
+                text("SELECT cashier_id FROM cashier_cards WHERE id = :cid"),
+                {"cid": order["cashier_card_id"]},
+            )
+            cc = cc_row.mappings().one_or_none()
+            if cc:
+                deduct_uid = cc["cashier_id"]
+        elif order.get("support_id"):
+            deduct_uid = order["support_id"]
+        if deduct_uid:
             sum_rub_val = float(order.get("sum_rub") or 0)
             await db.execute(
                 text("""
@@ -529,12 +564,12 @@ async def complete_deal(
                         deposit      = GREATEST(0, deposit - :amount),
                         deposit_work = GREATEST(0, deposit_work - :amount),
                         deposit_paid = deposit_paid + :amount
-                    WHERE id = :uid AND role = 'CASHIER'
+                    WHERE id = :uid
                 """),
-                {"amount": sum_rub_val, "uid": order["support_id"]},
+                {"amount": sum_rub_val, "uid": deduct_uid},
             )
-        except Exception as exc:
-            logger.warning(f"Deposit deduction failed for order {order_id}: {exc}")
+    except Exception as exc:
+        logger.warning(f"Deposit deduction failed for order {order_id}: {exc}")
 
     # Обновляем итоги смены если привязана
     shift_id = order.get("shift_id")

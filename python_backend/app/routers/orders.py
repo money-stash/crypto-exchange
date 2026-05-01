@@ -301,20 +301,29 @@ async def cancel_order(
         {"id": order_id, "reason": cancel_reason},
     )
 
-    # Unfreeze cashier deposit if the order was in a frozen state (AWAITING_HASH)
-    # (AWAITING_HASH is blocked for operator cancel above, but SUPERADMIN/MANAGER can still cancel)
-    if order.get("cashier_card_id") and order.get("support_id"):
-        frozen_statuses = ("AWAITING_HASH", "PAYMENT_PENDING", "AWAITING_CONFIRM")
-        if order["status"] in frozen_statuses:
+    # Unfreeze deposit if freeze was applied (freeze happens at AWAITING_HASH transition)
+    if order["status"] == "AWAITING_HASH":
+        unfreeze_uid = None
+        if order.get("cashier_card_id"):
+            try:
+                cc_row = await db.execute(
+                    text("SELECT cashier_id FROM cashier_cards WHERE id = :cid"),
+                    {"cid": order["cashier_card_id"]},
+                )
+                cc = cc_row.mappings().one_or_none()
+                if cc:
+                    unfreeze_uid = cc["cashier_id"]
+            except Exception:
+                pass
+        elif order.get("support_id"):
+            unfreeze_uid = order["support_id"]
+
+        if unfreeze_uid:
             sum_rub_val = float(order.get("sum_rub") or 0)
             try:
                 await db.execute(
-                    text("""
-                        UPDATE supports
-                        SET deposit_work = GREATEST(0, deposit_work - :amount)
-                        WHERE id = :uid AND role = 'CASHIER'
-                    """),
-                    {"amount": sum_rub_val, "uid": order["support_id"]},
+                    text("UPDATE supports SET deposit_work = GREATEST(0, deposit_work - :amount) WHERE id = :uid"),
+                    {"amount": sum_rub_val, "uid": unfreeze_uid},
                 )
             except Exception as exc:
                 logger.warning(f"Deposit unfreeze failed on cancel for order {order_id}: {exc}")

@@ -685,7 +685,14 @@ const OrderDetailsPage = () => {
     }
 
     const startTime = new Date(order.sla_started_at);
-    const endTime = order.completed_at ? new Date(order.completed_at) : currentTime;
+    const isClosed = order.status === 'COMPLETED' || order.status === 'CANCELLED';
+    const endTime = order.completed_at
+      ? new Date(order.completed_at)
+      : isClosed && order.updated_at
+        ? new Date(order.updated_at)
+        : isClosed
+          ? startTime
+          : currentTime;
     const diffMs = endTime - startTime;
 
     if (diffMs < 0) return null;
@@ -888,7 +895,7 @@ const managementUsdtRate = (() => {
                       </>
                     ) : (
                       <>
-                        {(order.status === 'AWAITING_CONFIRM' || (order.dir === 'BUY' && order.status === 'PAYMENT_PENDING')) ? (
+                        {order.status === 'AWAITING_CONFIRM' ? (
                           <button
                             onClick={handleConfirmPayment}
                             className="inline-flex items-center gap-2 px-5 py-2.5 bg-gradient-to-r from-blue-500 to-blue-600 hover:from-blue-600 hover:to-blue-700 text-white font-semibold rounded-xl transition-all duration-300 shadow-md shadow-blue-500/30 hover:shadow-lg hover:shadow-blue-500/40 hover:scale-105 active:scale-95"
@@ -975,12 +982,15 @@ const managementUsdtRate = (() => {
                   <div className="flex justify-between items-center">
                     <span className="text-sm font-medium text-gray-600 dark:text-gray-500">Время в работе:</span>
                     <div className="flex flex-col items-end gap-1">
-                      <AnimatedTimer 
-                        time={getWorkingTime()} 
-                        isCompleted={order.status === 'COMPLETED'}
+                      <AnimatedTimer
+                        time={getWorkingTime()}
+                        isCompleted={order.status === 'COMPLETED' || order.status === 'CANCELLED'}
                       />
                       {order.status === 'COMPLETED' && (
                         <div className="text-xs font-medium text-green-600 dark:text-green-500">выполнено</div>
+                      )}
+                      {order.status === 'CANCELLED' && (
+                        <div className="text-xs font-medium text-red-500 dark:text-red-400">отменено</div>
                       )}
                       {order.status === 'PAYMENT_PENDING' && (
                         <div className="text-xs font-medium text-orange-600 dark:text-orange-500">в работе</div>

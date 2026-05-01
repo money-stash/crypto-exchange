@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useCallback, useRef } from 'react';
-import { financeApi, shiftsApi } from '../services/api';
+import { financeApi, shiftsApi, ratesApi } from '../services/api';
 import { useAuth } from '../hooks/useAuth';
 import { BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer, CartesianGrid } from 'recharts';
 import { TrendingUp, Download, Calendar, Users, Zap, RefreshCw, Clock, Pencil, Check, X } from 'lucide-react';
@@ -96,8 +96,10 @@ function CryptoPurchasesSection() {
   const [items, setItems] = useState([]);
   const [loading, setLoading] = useState(true);
   const [showForm, setShowForm] = useState(false);
-  const [form, setForm] = useState({ coin: 'BTC', amount_coin: '', amount_usdt: '', usdt_rate_rub: '', note: '' });
+  const [form, setForm] = useState({ coin: 'BTC', amount_coin: '', amount_usdt: '', note: '' });
   const [saving, setSaving] = useState(false);
+  const [usdtRateRub, setUsdtRateRub] = useState(null);
+  const [allRatesRub, setAllRatesRub] = useState({});
 
   const load = useCallback(async () => {
     try {
@@ -108,20 +110,41 @@ function CryptoPurchasesSection() {
 
   useEffect(() => { load(); }, [load]);
 
+  const openForm = async () => {
+    setShowForm(true);
+    try {
+      const r = await ratesApi.getRates();
+      const rates = r.data || [];
+      const usdt = rates.find(x => x.coin === 'USDT');
+      const usdtRate = usdt ? parseFloat(usdt.manual_rate_rub || usdt.rate_rub) || null : null;
+      setUsdtRateRub(usdtRate);
+      const map = {};
+      rates.forEach(x => { map[x.coin] = parseFloat(x.manual_rate_rub || x.rate_rub) || null; });
+      setAllRatesRub(map);
+    } catch {}
+  };
+
+  const calcAmountCoin = (amountUsdt, coin) => {
+    const coinRate = allRatesRub[coin];
+    if (!coinRate || !usdtRateRub || !amountUsdt || parseFloat(amountUsdt) <= 0) return '';
+    const coinRateUsdt = coinRate / usdtRateRub;
+    return (parseFloat(amountUsdt) / coinRateUsdt).toFixed(8);
+  };
+
   const handleAdd = async () => {
-    if (!form.amount_coin || !form.amount_usdt || !form.usdt_rate_rub) return toast.error('Заполните все поля');
+    if (!form.amount_coin || !form.amount_usdt) return toast.error('Заполните все поля');
     setSaving(true);
     try {
       await financeApi.addPurchase({
         coin: form.coin,
         amount_coin: parseFloat(form.amount_coin),
         amount_usdt: parseFloat(form.amount_usdt),
-        usdt_rate_rub: parseFloat(form.usdt_rate_rub),
+        usdt_rate_rub: usdtRateRub || 0,
         note: form.note || null,
       });
       toast.success('Закупка добавлена');
       setShowForm(false);
-      setForm({ coin: 'BTC', amount_coin: '', amount_usdt: '', usdt_rate_rub: '', note: '' });
+      setForm({ coin: 'BTC', amount_coin: '', amount_usdt: '', note: '' });
       load();
     } catch (e) {
       toast.error(e?.response?.data?.detail || 'Ошибка');
@@ -139,7 +162,7 @@ function CryptoPurchasesSection() {
     <div>
       <div className="flex items-center justify-between mb-3">
         <h3 className="text-sm font-semibold text-gray-700 dark:text-gray-300">Закупки крипты</h3>
-        <button onClick={() => setShowForm(true)}
+        <button onClick={openForm}
           className="px-3 py-1.5 bg-blue-600 text-white rounded-lg text-xs font-medium hover:bg-blue-700 transition-colors">
           + Добавить
         </button>
@@ -185,31 +208,50 @@ function CryptoPurchasesSection() {
             <div className="space-y-3">
               <div>
                 <label className="block text-xs font-medium text-gray-600 dark:text-gray-400 mb-1">Монета</label>
-                <select value={form.coin} onChange={e => setForm(p => ({ ...p, coin: e.target.value }))}
+                <select value={form.coin} onChange={e => {
+                    const coin = e.target.value;
+                    setForm(p => ({ ...p, coin, amount_coin: calcAmountCoin(p.amount_usdt, coin) }));
+                  }}
                   className="w-full px-3 py-2 text-sm border border-gray-200 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-700 text-gray-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-blue-500">
                   {['BTC', 'LTC', 'USDT', 'XMR'].map(c => <option key={c}>{c}</option>)}
                 </select>
               </div>
-              {[
-                { key: 'amount_coin', label: 'Количество монет', placeholder: '0.00157' },
-                { key: 'amount_usdt', label: 'Потрачено USDT', placeholder: '100.00' },
-                { key: 'usdt_rate_rub', label: 'Курс USDT (₽/USDT)', placeholder: '90.5' },
-                { key: 'note', label: 'Примечание (необязательно)', placeholder: 'Закупка для горячего кошелька' },
-              ].map(f => (
-                <div key={f.key}>
-                  <label className="block text-xs font-medium text-gray-600 dark:text-gray-400 mb-1">{f.label}</label>
-                  <input type={f.key === 'note' ? 'text' : 'number'} step="any"
-                    value={form[f.key]}
-                    onChange={e => setForm(p => ({ ...p, [f.key]: e.target.value }))}
-                    placeholder={f.placeholder}
-                    className="w-full px-3 py-2 text-sm border border-gray-200 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-700 text-gray-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-blue-500" />
-                </div>
-              ))}
-              {form.amount_coin && form.amount_usdt && form.usdt_rate_rub && (
-                <div className="p-3 bg-blue-50 dark:bg-blue-900/20 rounded-lg text-xs text-blue-700 dark:text-blue-300">
-                  Курс монеты: {((parseFloat(form.amount_usdt) / parseFloat(form.amount_coin)) * parseFloat(form.usdt_rate_rub)).toLocaleString('ru-RU', { maximumFractionDigits: 2 })} ₽/{form.coin}
-                  &nbsp;·&nbsp;
-                  Стоимость: {(parseFloat(form.amount_usdt) * parseFloat(form.usdt_rate_rub)).toLocaleString('ru-RU', { maximumFractionDigits: 0 })} ₽
+              <div>
+                <label className="block text-xs font-medium text-gray-600 dark:text-gray-400 mb-1">Потрачено USDT</label>
+                <input type="number" step="any" value={form.amount_usdt}
+                  onChange={e => {
+                    const usdt = e.target.value;
+                    setForm(p => ({ ...p, amount_usdt: usdt, amount_coin: calcAmountCoin(usdt, p.coin) }));
+                  }}
+                  placeholder="100.00"
+                  className="w-full px-3 py-2 text-sm border border-gray-200 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-700 text-gray-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-blue-500" />
+              </div>
+              <div>
+                <label className="block text-xs font-medium text-gray-600 dark:text-gray-400 mb-1">
+                  Количество {form.coin}
+                  {form.amount_coin && <span className="ml-1 text-blue-500">(авто)</span>}
+                </label>
+                <input type="number" step="any" value={form.amount_coin}
+                  onChange={e => setForm(p => ({ ...p, amount_coin: e.target.value }))}
+                  placeholder="0.00157"
+                  className="w-full px-3 py-2 text-sm border border-gray-200 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-700 text-gray-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-blue-500" />
+              </div>
+              <div>
+                <label className="block text-xs font-medium text-gray-600 dark:text-gray-400 mb-1">Примечание (необязательно)</label>
+                <input type="text" value={form.note}
+                  onChange={e => setForm(p => ({ ...p, note: e.target.value }))}
+                  placeholder="Закупка для горячего кошелька"
+                  className="w-full px-3 py-2 text-sm border border-gray-200 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-700 text-gray-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-blue-500" />
+              </div>
+              {form.amount_coin && form.amount_usdt && parseFloat(form.amount_coin) > 0 && (
+                <div className="p-3 bg-blue-50 dark:bg-blue-900/20 rounded-lg text-xs text-blue-700 dark:text-blue-300 space-y-1">
+                  <div>Курс {form.coin}: <b>{(parseFloat(form.amount_usdt) / parseFloat(form.amount_coin)).toLocaleString('ru-RU', { maximumFractionDigits: 2 })} USDT/{form.coin}</b></div>
+                  {usdtRateRub && (
+                    <>
+                      <div>Курс USDT: <b>{usdtRateRub.toLocaleString('ru-RU', { maximumFractionDigits: 2 })} ₽</b> (авто)</div>
+                      <div>Стоимость: <b>{(parseFloat(form.amount_usdt) * usdtRateRub).toLocaleString('ru-RU', { maximumFractionDigits: 0 })} ₽</b></div>
+                    </>
+                  )}
                 </div>
               )}
             </div>
