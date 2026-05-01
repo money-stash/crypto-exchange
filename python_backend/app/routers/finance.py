@@ -1,7 +1,8 @@
 from fastapi import APIRouter, Depends, HTTPException, Query
+from pydantic import BaseModel as _BaseModel
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession
-from typing import Optional
+from typing import Optional, Optional as _Optional
 import logging
 import io
 
@@ -32,12 +33,16 @@ async def get_finance_stats(
     else:
         filter_uid = None
 
-    period_sql = {"day": "1 DAY", "week": "7 DAY", "month": "30 DAY"}[period]
+    period_cond = {
+        "day":   "DATE(o.completed_at) = CURDATE()",
+        "week":  "DATE(o.completed_at) >= CURDATE() - INTERVAL 6 DAY",
+        "month": "DATE(o.completed_at) >= CURDATE() - INTERVAL 29 DAY",
+    }[period]
 
-    params: dict = {"interval": period_sql}
+    params: dict = {}
     where_parts = [
         "o.status = 'COMPLETED'",
-        f"o.completed_at >= DATE_SUB(NOW(), INTERVAL {period_sql})",
+        period_cond,
     ]
 
     if filter_uid:
@@ -169,7 +174,16 @@ async def get_operator_stats(
     if current_user.role == "OPERATOR" and current_user.id != support_id:
         raise HTTPException(403, "Доступ запрещён")
 
-    period_sql = {"day": "1 DAY", "week": "7 DAY", "month": "30 DAY"}[period]
+    period_cond_o = {
+        "day":   "DATE(o.completed_at) = CURDATE()",
+        "week":  "DATE(o.completed_at) >= CURDATE() - INTERVAL 6 DAY",
+        "month": "DATE(o.completed_at) >= CURDATE() - INTERVAL 29 DAY",
+    }[period]
+    period_cond_s = {
+        "day":   "DATE(started_at) = CURDATE()",
+        "week":  "DATE(started_at) >= CURDATE() - INTERVAL 6 DAY",
+        "month": "DATE(started_at) >= CURDATE() - INTERVAL 29 DAY",
+    }[period]
 
     # Заявки
     orders_rows = await db.execute(
@@ -181,7 +195,7 @@ async def get_operator_stats(
             FROM orders o
             WHERE o.support_id = :uid
               AND o.status = 'COMPLETED'
-              AND o.completed_at >= DATE_SUB(NOW(), INTERVAL {period_sql})
+              AND {period_cond_o}
             ORDER BY o.completed_at DESC
         """),
         {"uid": support_id},
@@ -195,7 +209,7 @@ async def get_operator_stats(
                 TIMESTAMPDIFF(MINUTE, started_at, COALESCE(ended_at, NOW())) AS duration_min
             FROM operator_shifts
             WHERE support_id = :uid
-              AND started_at >= DATE_SUB(NOW(), INTERVAL {period_sql})
+              AND {period_cond_s}
             ORDER BY started_at DESC
         """),
         {"uid": support_id},
@@ -237,7 +251,11 @@ async def export_finance(
     from fastapi.responses import StreamingResponse
     import csv
 
-    period_sql = {"day": "1 DAY", "week": "7 DAY", "month": "30 DAY"}[period]
+    period_cond_export = {
+        "day":   "DATE(o.completed_at) = CURDATE()",
+        "week":  "DATE(o.completed_at) >= CURDATE() - INTERVAL 6 DAY",
+        "month": "DATE(o.completed_at) >= CURDATE() - INTERVAL 29 DAY",
+    }[period]
     params: dict = {}
     where_extra = ""
     if support_id:
@@ -255,7 +273,7 @@ async def export_finance(
             FROM orders o
             LEFT JOIN supports sp ON sp.id = o.support_id
             WHERE o.status = 'COMPLETED'
-              AND o.completed_at >= DATE_SUB(NOW(), INTERVAL {period_sql})
+              AND {period_cond_export}
               {where_extra}
             ORDER BY o.completed_at DESC
         """),
@@ -313,3 +331,177 @@ async def get_monthly_summaries(
         {"months": months},
     )
     return [dict(r._mapping) for r in rows]
+
+
+class CryptoPurchaseCreate(_BaseModel):
+    coin: str = "BTC"
+    amount_coin: float
+    amount_usdt: float
+    usdt_rate_rub: float  # RUB per USDT
+    note: _Optional[str] = None
+
+
+@router.get("/orders-detail")
+async def get_orders_detail(
+    period: str = Query("day", regex="^(day|week|month)$"),
+    operator_type: _Optional[str] = None,
+    current_user: Support = Depends(require_auth),
+    db: AsyncSession = Depends(get_db),
+):
+    """Детальная таблица заявок: дата, ID, оператор, поступление, метод оплаты, ЗП оператора, курс монеты, прибыль."""
+    period_cond = {
+        "day":   "DATE(o.completed_at) = CURDATE()",
+        "week":  "DATE(o.completed_at) >= CURDATE() - INTERVAL 6 DAY",
+        "month": "DATE(o.completed_at) >= CURDATE() - INTERVAL 29 DAY",
+    }[period]
+
+    where = f"o.status = 'COMPLETED' AND {period_cond}"
+    params: dict = {}
+
+    if current_user.role == "OPERATOR":
+        where += " AND o.support_id = :uid"
+        params["uid"] = current_user.id
+
+    if operator_type and operator_type != "all":
+        where += " AND sp.operator_type = :op_type"
+        params["op_type"] = operator_type
+
+    # Get current USDT rate for salary calculation
+    usdt_row = await db.execute(
+        text("SELECT rate_rub, is_manual, manual_rate_rub FROM rates WHERE coin = 'USDT'")
+    )
+    usdt_rec = usdt_row.mappings().one_or_none()
+    usdt_rate = 0.0
+    if usdt_rec:
+        usdt_rate = float(
+            usdt_rec["manual_rate_rub"]
+            if usdt_rec["is_manual"] and usdt_rec["manual_rate_rub"]
+            else usdt_rec["rate_rub"]
+        )
+
+    try:
+        rows = await db.execute(text(f"""
+            SELECT
+                o.id,
+                o.unique_id,
+                o.completed_at,
+                o.sum_rub,
+                o.coin,
+                o.rate_rub,
+                o.dir,
+                CASE
+                    WHEN o.exch_sbp_phone IS NOT NULL AND o.exch_sbp_phone != '' THEN 'СБП'
+                    WHEN o.exch_card_number IS NOT NULL AND o.exch_card_number != '' THEN 'Карта'
+                    WHEN o.exch_crypto_address IS NOT NULL THEN 'Крипта'
+                    WHEN o.user_card_number IS NOT NULL AND o.user_card_number != '' THEN 'Карта'
+                    ELSE '—'
+                END AS payment_method,
+                sp.login AS operator_login,
+                COALESCE(sp.per_order_rate_usd, 0) AS per_order_rate_usd,
+                COALESCE(sp.daily_rate_usd, 0) AS daily_rate_usd,
+                o.operator_profit_rub
+            FROM orders o
+            LEFT JOIN supports sp ON sp.id = o.support_id
+            WHERE {where}
+            ORDER BY o.completed_at DESC
+            LIMIT 500
+        """), params)
+        orders = [dict(r._mapping) for r in rows]
+    except Exception as e:
+        logger.error(f"orders-detail error: {e}")
+        return {"orders": [], "usdt_rate": usdt_rate}
+
+    result = []
+    for o in orders:
+        per_order_rub = float(o.get("per_order_rate_usd") or 0) * usdt_rate
+        sum_rub = float(o.get("sum_rub") or 0)
+        profit_rub = sum_rub - per_order_rub
+        result.append({
+            **o,
+            "sum_rub": sum_rub,
+            "rate_rub": float(o.get("rate_rub") or 0),
+            "operator_salary_rub": round(per_order_rub, 2),
+            "profit_rub": round(profit_rub, 2),
+            "completed_at": str(o["completed_at"]) if o.get("completed_at") else None,
+        })
+
+    return {"orders": result, "usdt_rate": usdt_rate}
+
+
+@router.get("/purchases")
+async def list_crypto_purchases(
+    limit: int = Query(50, ge=1, le=200),
+    offset: int = Query(0, ge=0),
+    current_user: Support = Depends(require_auth),
+    db: AsyncSession = Depends(get_db),
+):
+    if current_user.role not in ("SUPERADMIN", "MANAGER"):
+        raise HTTPException(403, "Недостаточно прав")
+    try:
+        rows = await db.execute(text("""
+            SELECT * FROM crypto_purchases ORDER BY created_at DESC LIMIT :lim OFFSET :off
+        """), {"lim": limit, "off": offset})
+        items = [dict(r._mapping) for r in rows]
+        total_row = await db.execute(text("SELECT COUNT(*) FROM crypto_purchases"))
+        total = total_row.scalar() or 0
+    except Exception:
+        items = []
+        total = 0
+    return {"items": items, "total": total}
+
+
+@router.post("/purchases", status_code=201)
+async def add_crypto_purchase(
+    body: CryptoPurchaseCreate,
+    current_user: Support = Depends(require_auth),
+    db: AsyncSession = Depends(get_db),
+):
+    if current_user.role not in ("SUPERADMIN", "MANAGER"):
+        raise HTTPException(403, "Недостаточно прав")
+    if body.amount_coin <= 0 or body.amount_usdt <= 0:
+        raise HTTPException(400, "Суммы должны быть > 0")
+    if body.usdt_rate_rub <= 0:
+        raise HTTPException(400, "Курс USDT должен быть > 0")
+
+    coin_rate_rub = (body.amount_usdt / body.amount_coin) * body.usdt_rate_rub
+
+    try:
+        result = await db.execute(text("""
+            INSERT INTO crypto_purchases (coin, amount_coin, amount_usdt, usdt_rate_rub, coin_rate_rub, note)
+            VALUES (:coin, :amount_coin, :amount_usdt, :usdt_rate_rub, :coin_rate_rub, :note)
+        """), {
+            "coin": body.coin.upper(),
+            "amount_coin": body.amount_coin,
+            "amount_usdt": body.amount_usdt,
+            "usdt_rate_rub": body.usdt_rate_rub,
+            "coin_rate_rub": coin_rate_rub,
+            "note": body.note or None,
+        })
+        await db.commit()
+        purchase_id = result.lastrowid
+    except Exception as e:
+        raise HTTPException(500, f"Ошибка сохранения: {e}")
+
+    return {
+        "success": True,
+        "id": purchase_id,
+        "coin": body.coin.upper(),
+        "amount_coin": body.amount_coin,
+        "amount_usdt": body.amount_usdt,
+        "usdt_rate_rub": body.usdt_rate_rub,
+        "coin_rate_rub": round(coin_rate_rub, 2),
+        "cost_rub": round(body.amount_usdt * body.usdt_rate_rub, 2),
+    }
+
+
+@router.delete("/purchases/{purchase_id}")
+async def delete_crypto_purchase(
+    purchase_id: int,
+    current_user: Support = Depends(require_auth),
+    db: AsyncSession = Depends(get_db),
+):
+    if current_user.role != "SUPERADMIN":
+        raise HTTPException(403, "Только суперадмин")
+    await db.execute(text("DELETE FROM crypto_purchases WHERE id = :id"), {"id": purchase_id})
+    await db.commit()
+    return {"success": True}

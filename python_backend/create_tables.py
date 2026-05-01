@@ -607,6 +607,21 @@ INSERT IGNORE INTO rates (coin, rate_rub) VALUES
     ('LTC',  0),
     ('XMR',  0),
     ('USDT', 0);
+
+-- ─────────────────────────────────────────────
+--  crypto_purchases  (закупки крипты)
+-- ─────────────────────────────────────────────
+CREATE TABLE IF NOT EXISTS crypto_purchases (
+    id                  BIGINT AUTO_INCREMENT PRIMARY KEY,
+    coin                VARCHAR(10) NOT NULL DEFAULT 'BTC',
+    amount_coin         DECIMAL(30,10) NOT NULL,
+    amount_usdt         DECIMAL(14,2) NOT NULL,
+    usdt_rate_rub       DECIMAL(20,8) NOT NULL DEFAULT 0,
+    coin_rate_rub       DECIMAL(20,8) NOT NULL,
+    cost_rub            DECIMAL(20,2) GENERATED ALWAYS AS (amount_usdt * usdt_rate_rub) STORED,
+    note                TEXT,
+    created_at          DATETIME DEFAULT NOW()
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
 """
 
 
@@ -634,6 +649,8 @@ MIGRATIONS = [
     ("cashier_teams", "deposit",                      "DECIMAL(14,2) DEFAULT 0"),
     ("cashier_teams", "deposit_work",                 "DECIMAL(14,2) DEFAULT 0"),
     ("cashier_teams", "deposit_paid",                 "DECIMAL(14,2) DEFAULT 0"),
+    ("supports", "daily_rate_usd",    "DECIMAL(10,2) DEFAULT 0"),
+    ("supports", "per_order_rate_usd", "DECIMAL(10,2) DEFAULT 0"),
 ]
 
 

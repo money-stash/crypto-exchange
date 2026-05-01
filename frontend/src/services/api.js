@@ -76,6 +76,7 @@ export const supportsApi = {
   createSupportDebtIntent: (id, requestedUsdt) => api.post(`/supports/${id}/debt/intents`, { requested_usdt: requestedUsdt }),
   getSupportDebtIntentStatus: (id, intentId) => api.get(`/supports/${id}/debt/intents/${intentId}`),
   getSupportDebtPayments: (id, params) => api.get(`/supports/${id}/debt/payments`, { params }),
+  updateSalary: (id, data) => api.patch(`/supports/${id}/salary`, data),
 };
 
 export const settingsApi = {
@@ -282,6 +283,10 @@ export const financeApi = {
     params,
     responseType: 'blob',
   }),
+  getOrdersDetail: (params) => api.get('/finance/orders-detail', { params }),
+  getPurchases: (params) => api.get('/finance/purchases', { params }),
+  addPurchase: (data) => api.post('/finance/purchases', data),
+  deletePurchase: (id) => api.delete(`/finance/purchases/${id}`),
 };
 
 export const auditLogsApi = {

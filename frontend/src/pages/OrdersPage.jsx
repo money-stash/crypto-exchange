@@ -727,6 +727,9 @@ const handleWorkTabChange = (tab) => {
     if (!order.sla_started_at) {
       return '-';
     }
+    if (order.status === 'CANCELLED' && !order.completed_at) {
+      return '-';
+    }
 
     const startTime = new Date(order.sla_started_at);
     const endTime = order.completed_at ? new Date(order.completed_at) : currentTime;

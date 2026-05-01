@@ -241,6 +241,7 @@ async def update_shift_penalty(
 @router.get("/")
 async def list_shifts(
     support_id: Optional[int] = None,
+    period: Optional[str] = None,  # day|week|month
     limit: int = 50,
     offset: int = 0,
     current_user: Support = Depends(require_auth),
@@ -257,6 +258,12 @@ async def list_shifts(
     if uid:
         where += " AND s.support_id = :uid"
         params["uid"] = uid
+    if period == "day":
+        where += " AND DATE(s.started_at) = CURDATE()"
+    elif period == "week":
+        where += " AND DATE(s.started_at) >= CURDATE() - INTERVAL 6 DAY"
+    elif period == "month":
+        where += " AND DATE(s.started_at) >= CURDATE() - INTERVAL 29 DAY"
 
     rows = await db.execute(
         text(f"""

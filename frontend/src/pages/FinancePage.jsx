@@ -40,6 +40,196 @@ function fmt(n, decimals = 2) {
   return Number(n || 0).toLocaleString('ru-RU', { minimumFractionDigits: decimals, maximumFractionDigits: decimals });
 }
 
+function DetailOrdersTable({ period, tab }) {
+  const [orders, setOrders] = useState([]);
+  const [loading, setLoading] = useState(true);
+
+  useEffect(() => {
+    setLoading(true);
+    financeApi.getOrdersDetail({ period, operator_type: tab === 'all' ? undefined : tab })
+      .then(r => setOrders(r.data.orders || []))
+      .catch(() => {})
+      .finally(() => setLoading(false));
+  }, [period, tab]);
+
+  const fmtDt = (dt) => dt ? new Date(dt).toLocaleString('ru-RU', { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' }) : '—';
+
+  if (loading) return <div className="text-sm text-gray-400 py-4">Загрузка...</div>;
+  if (!orders.length) return <div className="text-sm text-gray-400 py-4">Нет данных</div>;
+
+  return (
+    <div className="overflow-x-auto rounded-xl border border-gray-200 dark:border-gray-700">
+      <table className="w-full text-xs">
+        <thead>
+          <tr className="bg-gray-50 dark:bg-gray-800/50 border-b border-gray-200 dark:border-gray-700">
+            {['Дата / Время', 'ID заявки', 'Оператор', 'Поступление (₽)', 'Метод оплаты', 'ЗП оператора (₽)', 'Курс монеты', 'Прибыль (₽)'].map(h => (
+              <th key={h} className="px-3 py-2 text-left font-semibold text-gray-500 dark:text-gray-400 uppercase tracking-wider whitespace-nowrap">{h}</th>
+            ))}
+          </tr>
+        </thead>
+        <tbody className="divide-y divide-gray-100 dark:divide-gray-800">
+          {orders.map(o => (
+            <tr key={o.id} className="bg-white dark:bg-gray-900 hover:bg-gray-50 dark:hover:bg-gray-800/50">
+              <td className="px-3 py-2 text-gray-500 whitespace-nowrap">{fmtDt(o.completed_at)}</td>
+              <td className="px-3 py-2 font-mono text-gray-700 dark:text-gray-300">{o.unique_id || o.id}</td>
+              <td className="px-3 py-2 font-semibold text-gray-800 dark:text-gray-200">{o.operator_login || '—'}</td>
+              <td className="px-3 py-2 font-mono text-gray-900 dark:text-white">{Number(o.sum_rub || 0).toLocaleString('ru-RU', { maximumFractionDigits: 0 })} ₽</td>
+              <td className="px-3 py-2 text-gray-600 dark:text-gray-400">{o.payment_method || '—'}</td>
+              <td className="px-3 py-2 font-mono text-orange-600 dark:text-orange-400">
+                {o.operator_salary_rub > 0 ? `-${Number(o.operator_salary_rub).toLocaleString('ru-RU', { maximumFractionDigits: 2 })} ₽` : '—'}
+              </td>
+              <td className="px-3 py-2 font-mono text-gray-500">
+                {o.rate_rub > 0 ? Number(o.rate_rub).toLocaleString('ru-RU', { maximumFractionDigits: 2 }) : '—'}
+              </td>
+              <td className={`px-3 py-2 font-mono font-semibold ${Number(o.profit_rub) >= 0 ? 'text-green-600 dark:text-green-400' : 'text-red-500'}`}>
+                {Number(o.profit_rub) >= 0 ? '+' : ''}{Number(o.profit_rub || 0).toLocaleString('ru-RU', { maximumFractionDigits: 2 })} ₽
+              </td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </div>
+  );
+}
+
+function CryptoPurchasesSection() {
+  const [items, setItems] = useState([]);
+  const [loading, setLoading] = useState(true);
+  const [showForm, setShowForm] = useState(false);
+  const [form, setForm] = useState({ coin: 'BTC', amount_coin: '', amount_usdt: '', usdt_rate_rub: '', note: '' });
+  const [saving, setSaving] = useState(false);
+
+  const load = useCallback(async () => {
+    try {
+      const r = await financeApi.getPurchases({ limit: 50 });
+      setItems(r.data.items || []);
+    } catch {} finally { setLoading(false); }
+  }, []);
+
+  useEffect(() => { load(); }, [load]);
+
+  const handleAdd = async () => {
+    if (!form.amount_coin || !form.amount_usdt || !form.usdt_rate_rub) return toast.error('Заполните все поля');
+    setSaving(true);
+    try {
+      await financeApi.addPurchase({
+        coin: form.coin,
+        amount_coin: parseFloat(form.amount_coin),
+        amount_usdt: parseFloat(form.amount_usdt),
+        usdt_rate_rub: parseFloat(form.usdt_rate_rub),
+        note: form.note || null,
+      });
+      toast.success('Закупка добавлена');
+      setShowForm(false);
+      setForm({ coin: 'BTC', amount_coin: '', amount_usdt: '', usdt_rate_rub: '', note: '' });
+      load();
+    } catch (e) {
+      toast.error(e?.response?.data?.detail || 'Ошибка');
+    } finally { setSaving(false); }
+  };
+
+  const handleDelete = async (id) => {
+    if (!window.confirm('Удалить запись?')) return;
+    try { await financeApi.deletePurchase(id); load(); } catch { toast.error('Ошибка'); }
+  };
+
+  const fmtDt = (dt) => dt ? new Date(dt).toLocaleString('ru-RU', { day: '2-digit', month: '2-digit', year: '2-digit', hour: '2-digit', minute: '2-digit' }) : '—';
+
+  return (
+    <div>
+      <div className="flex items-center justify-between mb-3">
+        <h3 className="text-sm font-semibold text-gray-700 dark:text-gray-300">Закупки крипты</h3>
+        <button onClick={() => setShowForm(true)}
+          className="px-3 py-1.5 bg-blue-600 text-white rounded-lg text-xs font-medium hover:bg-blue-700 transition-colors">
+          + Добавить
+        </button>
+      </div>
+
+      {loading ? <div className="text-sm text-gray-400 py-2">Загрузка...</div> : items.length === 0 ? (
+        <div className="text-sm text-gray-400 py-2">Закупок нет</div>
+      ) : (
+        <div className="overflow-x-auto rounded-xl border border-gray-200 dark:border-gray-700">
+          <table className="w-full text-xs">
+            <thead>
+              <tr className="bg-gray-50 dark:bg-gray-800/50 border-b border-gray-200 dark:border-gray-700">
+                {['Дата', 'Монета', 'Кол-во', 'Потрачено USDT', 'Курс USDT/₽', 'Курс монеты/₽', 'Стоимость ₽', 'Примечание', ''].map(h => (
+                  <th key={h} className="px-3 py-2 text-left font-semibold text-gray-500 dark:text-gray-400 uppercase tracking-wider whitespace-nowrap">{h}</th>
+                ))}
+              </tr>
+            </thead>
+            <tbody className="divide-y divide-gray-100 dark:divide-gray-800">
+              {items.map(p => (
+                <tr key={p.id} className="bg-white dark:bg-gray-900 hover:bg-gray-50 dark:hover:bg-gray-800/50">
+                  <td className="px-3 py-2 text-gray-500 whitespace-nowrap">{fmtDt(p.created_at)}</td>
+                  <td className="px-3 py-2 font-mono font-bold">{p.coin}</td>
+                  <td className="px-3 py-2 font-mono">{Number(p.amount_coin).toFixed(8)}</td>
+                  <td className="px-3 py-2 font-mono">{Number(p.amount_usdt).toFixed(2)} USDT</td>
+                  <td className="px-3 py-2 font-mono">{Number(p.usdt_rate_rub).toFixed(2)} ₽</td>
+                  <td className="px-3 py-2 font-mono">{Number(p.coin_rate_rub).toLocaleString('ru-RU', { maximumFractionDigits: 2 })} ₽</td>
+                  <td className="px-3 py-2 font-mono text-red-600 dark:text-red-400">-{Number(p.cost_rub || p.amount_usdt * p.usdt_rate_rub).toLocaleString('ru-RU', { maximumFractionDigits: 0 })} ₽</td>
+                  <td className="px-3 py-2 text-gray-400 max-w-[120px] truncate">{p.note || '—'}</td>
+                  <td className="px-3 py-2">
+                    <button onClick={() => handleDelete(p.id)} className="text-red-400 hover:text-red-600 text-xs">✕</button>
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      )}
+
+      {showForm && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50">
+          <div className="bg-white dark:bg-gray-800 rounded-2xl shadow-xl w-full max-w-md mx-4 p-6">
+            <h3 className="text-lg font-bold text-gray-900 dark:text-white mb-4">Добавить закупку крипты</h3>
+            <div className="space-y-3">
+              <div>
+                <label className="block text-xs font-medium text-gray-600 dark:text-gray-400 mb-1">Монета</label>
+                <select value={form.coin} onChange={e => setForm(p => ({ ...p, coin: e.target.value }))}
+                  className="w-full px-3 py-2 text-sm border border-gray-200 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-700 text-gray-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-blue-500">
+                  {['BTC', 'LTC', 'USDT', 'XMR'].map(c => <option key={c}>{c}</option>)}
+                </select>
+              </div>
+              {[
+                { key: 'amount_coin', label: 'Количество монет', placeholder: '0.00157' },
+                { key: 'amount_usdt', label: 'Потрачено USDT', placeholder: '100.00' },
+                { key: 'usdt_rate_rub', label: 'Курс USDT (₽/USDT)', placeholder: '90.5' },
+                { key: 'note', label: 'Примечание (необязательно)', placeholder: 'Закупка для горячего кошелька' },
+              ].map(f => (
+                <div key={f.key}>
+                  <label className="block text-xs font-medium text-gray-600 dark:text-gray-400 mb-1">{f.label}</label>
+                  <input type={f.key === 'note' ? 'text' : 'number'} step="any"
+                    value={form[f.key]}
+                    onChange={e => setForm(p => ({ ...p, [f.key]: e.target.value }))}
+                    placeholder={f.placeholder}
+                    className="w-full px-3 py-2 text-sm border border-gray-200 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-700 text-gray-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-blue-500" />
+                </div>
+              ))}
+              {form.amount_coin && form.amount_usdt && form.usdt_rate_rub && (
+                <div className="p-3 bg-blue-50 dark:bg-blue-900/20 rounded-lg text-xs text-blue-700 dark:text-blue-300">
+                  Курс монеты: {((parseFloat(form.amount_usdt) / parseFloat(form.amount_coin)) * parseFloat(form.usdt_rate_rub)).toLocaleString('ru-RU', { maximumFractionDigits: 2 })} ₽/{form.coin}
+                  &nbsp;·&nbsp;
+                  Стоимость: {(parseFloat(form.amount_usdt) * parseFloat(form.usdt_rate_rub)).toLocaleString('ru-RU', { maximumFractionDigits: 0 })} ₽
+                </div>
+              )}
+            </div>
+            <div className="flex gap-3 mt-5">
+              <button onClick={() => setShowForm(false)}
+                className="flex-1 py-2 border border-gray-200 dark:border-gray-600 rounded-lg text-sm text-gray-600 dark:text-gray-300 hover:bg-gray-50 dark:hover:bg-gray-700 transition-colors">
+                Отмена
+              </button>
+              <button onClick={handleAdd} disabled={saving}
+                className="flex-1 py-2 bg-blue-600 text-white rounded-lg text-sm font-medium hover:bg-blue-700 disabled:opacity-50 transition-colors">
+                {saving ? 'Сохранение...' : 'Добавить'}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
 export default function FinancePage() {
   const { user } = useAuth();
   const isSuperAdmin = user?.role === 'SUPERADMIN';
@@ -61,7 +251,7 @@ export default function FinancePage() {
       const [statsRes, monthlyRes, shiftsRes] = await Promise.all([
         financeApi.getStats(params),
         isSuperAdmin ? financeApi.getMonthlySummaries(6) : Promise.resolve({ data: [] }),
-        isSuperAdmin ? shiftsApi.getShifts({ limit: 30 }) : Promise.resolve({ data: [] }),
+        isSuperAdmin ? shiftsApi.getShifts({ limit: 30, period }) : Promise.resolve({ data: [] }),
       ]);
       setStats(statsRes.data);
       setMonthlySummaries(monthlyRes.data || []);
@@ -128,12 +318,12 @@ export default function FinancePage() {
     )},
     { header: 'Заявок', key: 'orders_count', render: (r) => <span className="font-mono">{r.orders_count}</span> },
     { header: 'Объём', key: 'volume_rub', render: (r) => <span className="font-mono text-gray-700 dark:text-gray-300">{fmt(r.volume_rub, 0)} ₽</span> },
+    { header: 'Смен', key: 'shifts_count', render: (r) => <span className="font-mono text-gray-500">{r.shifts_count}</span> },
     { header: 'Прибыль', key: 'profit_rub', render: (r) => (
       <span className={`font-mono font-semibold ${Number(r.profit_rub) >= 0 ? 'text-green-600 dark:text-green-400' : 'text-red-500'}`}>
         {Number(r.profit_rub) >= 0 ? '+' : ''}{fmt(r.profit_rub)} ₽
       </span>
     )},
-    { header: 'Смен', key: 'shifts_count', render: (r) => <span className="font-mono text-gray-500">{r.shifts_count}</span> },
   ];
 
   // Колонки таблицы "Итоги по месяцам"
@@ -144,12 +334,12 @@ export default function FinancePage() {
     }},
     { header: 'Заявок', key: 'orders_count', render: (r) => <span className="font-mono">{r.orders_count}</span> },
     { header: 'Объём', key: 'volume_rub', render: (r) => <span className="font-mono text-gray-700 dark:text-gray-300">{fmt(r.volume_rub, 0)} ₽</span> },
+    { header: 'Операторов', key: 'operators_count', render: (r) => <span className="font-mono text-gray-500">{r.operators_count}</span> },
     { header: 'Прибыль', key: 'profit_rub', render: (r) => (
       <span className={`font-mono font-semibold ${Number(r.profit_rub) >= 0 ? 'text-green-600 dark:text-green-400' : 'text-red-500'}`}>
         {Number(r.profit_rub) >= 0 ? '+' : ''}{fmt(r.profit_rub)} ₽
       </span>
     )},
-    { header: 'Операторов', key: 'operators_count', render: (r) => <span className="font-mono text-gray-500">{r.operators_count}</span> },
   ];
 
   const totals = stats?.totals || {};
@@ -302,6 +492,19 @@ export default function FinancePage() {
               </div>
             )}
 
+            {/* Детально по заявкам */}
+            {isSuperAdmin && (
+              <div>
+                <h3 className="text-sm font-semibold text-gray-700 dark:text-gray-300 mb-3">
+                  Детально по заявкам
+                </h3>
+                <DetailOrdersTable period={period} tab={tab} />
+              </div>
+            )}
+
+            {/* Закупки крипты */}
+            {isSuperAdmin && <CryptoPurchasesSection />}
+
             {/* Смены (суперадмин) */}
             {isSuperAdmin && shifts.length > 0 && (
               <div>
@@ -313,7 +516,7 @@ export default function FinancePage() {
                   <table className="w-full text-xs">
                     <thead>
                       <tr className="bg-gray-50 dark:bg-gray-800/50 border-b border-gray-200 dark:border-gray-700">
-                        {['Оператор', 'Начало', 'Статус', 'Отработано', 'Заявок', 'Прибыль', 'Штраф'].map(h => (
+                        {['Оператор', 'Начало', 'Статус', 'Отработано', 'Заявок', 'Штраф', 'Прибыль'].map(h => (
                           <th key={h} className="px-3 py-2 text-left font-semibold text-gray-500 dark:text-gray-400 uppercase tracking-wider whitespace-nowrap">{h}</th>
                         ))}
                       </tr>
@@ -344,9 +547,6 @@ export default function FinancePage() {
                             </td>
                             <td className="px-3 py-2 font-mono text-gray-600 dark:text-gray-400">{durStr}</td>
                             <td className="px-3 py-2 font-mono text-center">{shift.orders_completed ?? 0}</td>
-                            <td className="px-3 py-2 font-mono text-green-600 dark:text-green-400 whitespace-nowrap">
-                              {Number(shift.total_profit_rub || 0) > 0 ? '+' : ''}{fmt(shift.total_profit_rub)} ₽
-                            </td>
                             <td className="px-3 py-2">
                               {isEditing ? (
                                 <div className="flex items-center gap-1">
@@ -389,6 +589,9 @@ export default function FinancePage() {
                                   )}
                                 </div>
                               )}
+                            </td>
+                            <td className="px-3 py-2 font-mono text-green-600 dark:text-green-400 whitespace-nowrap">
+                              {Number(shift.total_profit_rub || 0) > 0 ? '+' : ''}{fmt(shift.total_profit_rub)} ₽
                             </td>
                           </tr>
                         );

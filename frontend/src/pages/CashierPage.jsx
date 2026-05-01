@@ -130,10 +130,8 @@ export default function CashierPage() {
   const [extendCard, setExtendCard] = useState(null);
   const [extendAmount, setExtendAmount] = useState('');
   const [showTopupModal, setShowTopupModal] = useState(false);
-  const [topupCoin, setTopupCoin] = useState('BTC');
   const [topupTxHash, setTopupTxHash] = useState('');
   const [topupLoading, setTopupLoading] = useState(false);
-  const [depositTab, setDepositTab] = useState('BTC');
 
   const load = useCallback(async () => {
     try {
@@ -249,7 +247,7 @@ export default function CashierPage() {
     if (!hash || hash.length !== 64) return toast.error('Введите корректный хеш транзакции (64 символа)');
     setTopupLoading(true);
     try {
-      const res = await cashiersApi.topupMyDeposit({ tx_hash: hash, coin: topupCoin });
+      const res = await cashiersApi.topupMyDeposit({ tx_hash: hash, coin: 'USDT' });
       toast.success(res.data.message);
       setShowTopupModal(false);
       setTopupTxHash('');
@@ -260,9 +258,6 @@ export default function CashierPage() {
       setTopupLoading(false);
     }
   };
-
-  const DEPOSIT_COINS = ['BTC', 'LTC', 'USDT'];
-  const coinLabel = { BTC: 'Bitcoin', LTC: 'Litecoin', USDT: 'USDT TRC20' };
 
   const fmtRub = (v) => Number(v || 0).toLocaleString('ru-RU', { maximumFractionDigits: 0 });
   const pct = (used, limit) => {
@@ -316,7 +311,7 @@ export default function CashierPage() {
           <div className="flex items-center justify-between mb-4">
             <h2 className="text-base font-semibold text-gray-900 dark:text-white">Мой депозит</h2>
             <button
-              onClick={() => { setShowTopupModal(true); setTopupCoin(depositTab); setTopupTxHash(''); }}
+              onClick={() => { setShowTopupModal(true); setTopupTxHash(''); }}
               className="px-4 py-1.5 bg-green-600 hover:bg-green-700 text-white rounded-lg text-sm font-medium transition-colors"
             >
               + Пополнить
@@ -347,37 +342,25 @@ export default function CashierPage() {
             </div>
           )}
 
-          {/* Coin tabs + address */}
+          {/* USDT TRC20 deposit address */}
           <div>
-            <div className="flex gap-1 mb-3">
-              {DEPOSIT_COINS.map(c => (
-                <button key={c} onClick={() => setDepositTab(c)}
-                  className={`px-3 py-1.5 rounded-lg text-xs font-medium transition-colors ${
-                    depositTab === c
-                      ? 'bg-blue-600 text-white'
-                      : 'bg-gray-100 dark:bg-gray-700 text-gray-600 dark:text-gray-300 hover:bg-gray-200 dark:hover:bg-gray-600'
-                  }`}>
-                  {c}
-                </button>
-              ))}
-            </div>
-            {deposit.wallets?.[depositTab] ? (
+            {deposit.wallets?.USDT ? (
               <div className="p-3 bg-gray-50 dark:bg-gray-900/50 rounded-lg">
                 <p className="text-xs text-gray-500 dark:text-gray-400 mb-1">
-                  Адрес для пополнения ({coinLabel[depositTab]})
+                  Адрес для пополнения (USDT TRC20)
                 </p>
                 <code className="text-sm font-mono text-gray-900 dark:text-white break-all">
-                  {deposit.wallets[depositTab]}
+                  {deposit.wallets.USDT}
                 </code>
-                {deposit.rates?.[depositTab] > 0 && (
+                {deposit.rates?.USDT > 0 && (
                   <p className="text-xs text-gray-400 dark:text-gray-500 mt-1">
-                    Курс {depositTab}: {fmtRub(deposit.rates[depositTab])} ₽/{depositTab}
+                    Курс USDT: {fmtRub(deposit.rates.USDT)} ₽/USDT
                   </p>
                 )}
               </div>
             ) : (
               <div className="p-3 bg-gray-50 dark:bg-gray-900/50 rounded-lg text-sm text-gray-400 italic">
-                Адрес {depositTab} не настроен администратором.
+                Адрес USDT TRC20 не настроен администратором.
               </div>
             )}
           </div>
@@ -394,7 +377,7 @@ export default function CashierPage() {
                         item.status === 'REJECTED' ? 'bg-red-500' : 'bg-yellow-500'
                       }`} />
                       <span className="font-mono text-gray-600 dark:text-gray-300 truncate">
-                        {item.coin === 'MANUAL' ? 'Ручное' : `${Number(item.amount_coin).toFixed(8)} BTC`}
+                        {item.coin === 'MANUAL' ? 'Ручное' : `${Number(item.amount_coin).toFixed(2)} ${item.coin}`}
                       </span>
                     </div>
                     <div className="text-right flex-shrink-0 ml-3">
@@ -605,33 +588,18 @@ export default function CashierPage() {
               Сумма будет зачислена в рублях по курсу на момент проверки.
             </p>
 
-            {/* Coin selector */}
-            <label className="block text-xs font-medium text-gray-600 dark:text-gray-400 mb-1">Монета</label>
-            <div className="flex gap-2 mb-4">
-              {DEPOSIT_COINS.map(c => (
-                <button key={c} type="button" onClick={() => { setTopupCoin(c); setTopupTxHash(''); }}
-                  className={`flex-1 py-2 rounded-lg text-sm font-medium transition-colors border ${
-                    topupCoin === c
-                      ? 'bg-blue-600 text-white border-blue-600'
-                      : 'border-gray-200 dark:border-gray-600 text-gray-600 dark:text-gray-300 hover:bg-gray-50 dark:hover:bg-gray-700'
-                  }`}>
-                  {c}
-                </button>
-              ))}
-            </div>
-
-            {deposit?.wallets?.[topupCoin] ? (
+            {deposit?.wallets?.USDT ? (
               <div className="mb-4 p-3 bg-gray-50 dark:bg-gray-900/50 rounded-lg">
                 <p className="text-xs text-gray-500 dark:text-gray-400 mb-1">
-                  Адрес системы ({coinLabel[topupCoin]})
+                  Адрес системы (USDT TRC20)
                 </p>
                 <code className="text-sm font-mono text-gray-900 dark:text-white break-all">
-                  {deposit.wallets[topupCoin]}
+                  {deposit.wallets.USDT}
                 </code>
               </div>
             ) : (
               <div className="mb-4 p-3 bg-yellow-50 dark:bg-yellow-900/20 rounded-lg text-sm text-yellow-700 dark:text-yellow-400">
-                Адрес {topupCoin} не настроен. Обратитесь к администратору.
+                Адрес USDT TRC20 не настроен. Обратитесь к администратору.
               </div>
             )}
 
@@ -655,7 +623,7 @@ export default function CashierPage() {
               </button>
               <button
                 onClick={handleTopup}
-                disabled={topupLoading || topupTxHash.length !== 64 || !deposit?.wallets?.[topupCoin]}
+                disabled={topupLoading || topupTxHash.length !== 64 || !deposit?.wallets?.USDT}
                 className="flex-1 py-2 bg-green-600 text-white rounded-lg text-sm font-medium hover:bg-green-700 disabled:opacity-50 transition-colors"
               >
                 {topupLoading ? 'Проверка...' : 'Проверить и зачислить'}

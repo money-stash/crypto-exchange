@@ -85,7 +85,9 @@ const SupportsPage = () => {
     can_edit_requisites: true,
     deposit_paid: 0,
     deposit_work: 0,
-    rate_percent: 0
+    rate_percent: 0,
+    daily_rate_usd: 0,
+    per_order_rate_usd: 0
   });
   const [editSupport, setEditSupport] = useState({
     id: null,
@@ -98,6 +100,8 @@ const SupportsPage = () => {
     deposit_paid: 0,
     deposit_work: 0,
     rate_percent: 0,
+    daily_rate_usd: 0,
+    per_order_rate_usd: 0,
     newPassword: ''
   });
   const [pagination, setPagination] = useState({
@@ -320,7 +324,16 @@ const SupportsPage = () => {
       return;
     }
     try {
-      await supportsApi.createSupport(newSupport);
+      const createRes = await supportsApi.createSupport(newSupport);
+      const newId = createRes?.data?.id;
+      if (newId && (newSupport.daily_rate_usd || newSupport.per_order_rate_usd)) {
+        try {
+          await supportsApi.updateSalary(newId, {
+            daily_rate_usd: newSupport.daily_rate_usd || 0,
+            per_order_rate_usd: newSupport.per_order_rate_usd || 0,
+          });
+        } catch {}
+      }
       toast.success('Оператор добавлен');
       setShowCreateModal(false);
       setNewSupport({
@@ -333,7 +346,9 @@ const SupportsPage = () => {
         can_edit_requisites: true,
         deposit_paid: 0,
         deposit_work: 0,
-        rate_percent: 0
+        rate_percent: 0,
+        daily_rate_usd: 0,
+        per_order_rate_usd: 0
       });
       loadData();
     } catch (error) {
@@ -414,6 +429,12 @@ const SupportsPage = () => {
         updateData.password = editSupport.newPassword;
       }
       await supportsApi.updateSupport(editSupport.id, updateData);
+      try {
+        await supportsApi.updateSalary(editSupport.id, {
+          daily_rate_usd: editSupport.daily_rate_usd || 0,
+          per_order_rate_usd: editSupport.per_order_rate_usd || 0,
+        });
+      } catch {}
       toast.success(editSupport.newPassword ? 'Данные оператора и пароль обновлены' : 'Данные оператора обновлены');
       setShowEditModal(false);
       loadData();
@@ -1189,6 +1210,32 @@ const SupportsPage = () => {
                   placeholder="0.00"
                 />
               </div>
+              <div>
+                <label className="form-label mb-2">
+                  ЗП в день ($)
+                </label>
+                <input
+                  type="number"
+                  step="0.01"
+                  value={newSupport.daily_rate_usd || 0}
+                  onChange={e => setNewSupport(prev => ({ ...prev, daily_rate_usd: parseFloat(e.target.value) || 0 }))}
+                  className="form-input w-full"
+                  placeholder="0.00"
+                />
+              </div>
+              <div>
+                <label className="form-label mb-2">
+                  ЗП за заявку ($)
+                </label>
+                <input
+                  type="number"
+                  step="0.01"
+                  value={newSupport.per_order_rate_usd || 0}
+                  onChange={e => setNewSupport(prev => ({ ...prev, per_order_rate_usd: parseFloat(e.target.value) || 0 }))}
+                  className="form-input w-full"
+                  placeholder="0.00"
+                />
+              </div>
             </div>
         <div className="flex justify-end space-x-3 pt-4 border-t border-gray-100 dark:border-gray-700 -mx-6 px-6 -mb-4 pb-4 mt-6 bg-gray-50 dark:bg-gray-700/50 rounded-b-2xl">
           <button
@@ -1385,6 +1432,32 @@ const SupportsPage = () => {
                   step="0.01"
                   value={editSupport.rate_percent}
                   onChange={(e) => setEditSupport(prev => ({ ...prev, rate_percent: parseFloat(e.target.value) || 0 }))}
+                  className="form-input w-full"
+                  placeholder="0.00"
+                />
+              </div>
+              <div>
+                <label className="form-label mb-2">
+                  ЗП в день ($)
+                </label>
+                <input
+                  type="number"
+                  step="0.01"
+                  value={editSupport.daily_rate_usd || 0}
+                  onChange={e => setEditSupport(prev => ({ ...prev, daily_rate_usd: parseFloat(e.target.value) || 0 }))}
+                  className="form-input w-full"
+                  placeholder="0.00"
+                />
+              </div>
+              <div>
+                <label className="form-label mb-2">
+                  ЗП за заявку ($)
+                </label>
+                <input
+                  type="number"
+                  step="0.01"
+                  value={editSupport.per_order_rate_usd || 0}
+                  onChange={e => setEditSupport(prev => ({ ...prev, per_order_rate_usd: parseFloat(e.target.value) || 0 }))}
                   className="form-input w-full"
                   placeholder="0.00"
                 />

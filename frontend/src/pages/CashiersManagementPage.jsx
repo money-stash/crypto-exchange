@@ -1,12 +1,11 @@
 import React, { useState, useEffect, useCallback, useRef } from 'react';
 import { toast } from 'react-toastify';
 import { cashiersApi } from '../services/api';
-import { Eye, EyeOff, ChevronDown, ChevronRight, Users, CreditCard, Settings, MessageSquare, Send } from 'lucide-react';
+import { Eye, EyeOff, ChevronDown, ChevronRight, Users, CreditCard, Settings } from 'lucide-react';
 
 const TABS = [
   { key: 'teams',    label: 'Команды',   icon: Users },
   { key: 'cashiers', label: 'Кассиры',   icon: CreditCard },
-  { key: 'chats',    label: 'Чаты',      icon: MessageSquare },
   { key: 'settings', label: 'Настройки', icon: Settings },
 ];
 
@@ -728,10 +727,8 @@ function CashiersTab({ teams }) {
   );
 }
 
-// ---------------------------------------------------------------------------
-// Chats tab — admin chats with cashiers
-// ---------------------------------------------------------------------------
-function ChatsTab() {
+/* Cashier chats moved to OperatorManagerChatsPage */
+function _ChatsTabRemoved_UNUSED() {
   const [chats, setChats] = useState([]);
   const [loading, setLoading] = useState(true);
   const [selected, setSelected] = useState(null); // { cashierId, cashierLogin }
@@ -997,7 +994,6 @@ export default function CashiersManagementPage() {
 
       {tab === 'teams'    && <TeamsTab />}
       {tab === 'cashiers' && <CashiersTab teams={teams} />}
-      {tab === 'chats'    && <ChatsTab />}
       {tab === 'settings' && <SettingsTab />}
     </div>
   );

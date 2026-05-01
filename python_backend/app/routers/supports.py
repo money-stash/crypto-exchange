@@ -1,5 +1,6 @@
 import bcrypt
 from fastapi import APIRouter, Depends, HTTPException, Query
+from pydantic import BaseModel
 from sqlalchemy import select, text, update
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -396,6 +397,29 @@ async def create_support(
     db.add(support)
     await db.flush()
     return {"message": "Оператор создан", "id": support.id}
+
+
+# ---------------------------------------------------------------------------
+# PATCH /:id/salary
+# ---------------------------------------------------------------------------
+
+class SalaryUpdateRequest(BaseModel):
+    daily_rate_usd: float = 0.0
+    per_order_rate_usd: float = 0.0
+
+@router.patch("/{support_id}/salary")
+async def update_operator_salary(
+    support_id: int,
+    body: SalaryUpdateRequest,
+    current_user: Support = Depends(require_superadmin),
+    db: AsyncSession = Depends(get_db),
+):
+    await db.execute(text("""
+        UPDATE supports SET daily_rate_usd = :daily, per_order_rate_usd = :per_order
+        WHERE id = :id
+    """), {"daily": body.daily_rate_usd, "per_order": body.per_order_rate_usd, "id": support_id})
+    await db.commit()
+    return {"success": True, "daily_rate_usd": body.daily_rate_usd, "per_order_rate_usd": body.per_order_rate_usd}
 
 
 # ---------------------------------------------------------------------------

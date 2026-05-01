@@ -392,7 +392,7 @@ async def extend_my_card_limit(
 # Cashier deposit — self endpoints
 # ---------------------------------------------------------------------------
 
-DEPOSIT_COINS = ["BTC", "LTC", "USDT"]
+DEPOSIT_COINS = ["USDT"]
 
 
 async def _get_deposit_wallet(db, coin: str) -> str | None:

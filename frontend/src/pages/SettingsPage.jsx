@@ -320,13 +320,11 @@ const BotSettingsSection = ({ botId }) => {
 
 // ── Адреса для пополнения депозита кассиров ────────────────────────────────
 const DEPOSIT_COINS = [
-  { coin: 'BTC',  label: 'Bitcoin (BTC)',        placeholder: 'bc1q... или 1... или 3...' },
-  { coin: 'LTC',  label: 'Litecoin (LTC)',        placeholder: 'ltc1q... или L...' },
-  { coin: 'USDT', label: 'USDT TRC20',            placeholder: 'T...' },
+  { coin: 'USDT', label: 'USDT TRC20', placeholder: 'T...' },
 ];
 
 const CashierDepositWalletsSection = () => {
-  const [wallets, setWallets] = useState({ BTC: null, LTC: null, USDT: null });
+  const [wallets, setWallets] = useState({ USDT: null });
   const [editing, setEditing] = useState(null); // coin string
   const [inputVal, setInputVal] = useState('');
   const [saving, setSaving] = useState(false);
