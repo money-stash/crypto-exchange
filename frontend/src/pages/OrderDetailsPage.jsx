@@ -903,17 +903,15 @@ const managementUsdtRate = (() => {
                             <Check className="w-4 h-4" />
                             <span className="hidden sm:inline">Подтвердить оплату</span>
                           </button>
-                        ) : (
-                          !((order.dir === 'BUY') && !canCompleteBuyOrder) && (
-                            <button
-                              onClick={handleCompleteOrder}
-                              className="inline-flex items-center gap-2 px-5 py-2.5 bg-gradient-to-r from-green-500 to-emerald-600 hover:from-green-600 hover:to-emerald-700 text-white font-semibold rounded-xl transition-all duration-300 shadow-md shadow-green-500/30 hover:shadow-lg hover:shadow-green-500/40 hover:scale-105 active:scale-95"
-                            >
-                              <Check className="w-4 h-4" />
-                              <span className="hidden sm:inline">Завершить</span>
-                            </button>
-                          )
-                        )}
+                        ) : order.status === 'AWAITING_HASH' ? (
+                          <button
+                            onClick={handleCompleteOrder}
+                            className="inline-flex items-center gap-2 px-5 py-2.5 bg-gradient-to-r from-green-500 to-emerald-600 hover:from-green-600 hover:to-emerald-700 text-white font-semibold rounded-xl transition-all duration-300 shadow-md shadow-green-500/30 hover:shadow-lg hover:shadow-green-500/40 hover:scale-105 active:scale-95"
+                          >
+                            <Check className="w-4 h-4" />
+                            <span className="hidden sm:inline">Завершить</span>
+                          </button>
+                        ) : null}
                       </>
                     )}
                     {canOperatorCancelCurrentOrder && (

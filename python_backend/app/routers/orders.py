@@ -523,6 +523,41 @@ async def set_order_requisites(
     updated_order = dict(updated.mappings().one())
     await sio.emit_order_updated(updated_order)
 
+    # Сохраняем реквизиты как сообщение в чат заявки
+    if isinstance(body, dict) and fields:
+        req_lines = []
+        if body.get("sbp_phone"):
+            req_lines.append(f"📱 СБП: {body['sbp_phone']}")
+        elif body.get("card_number"):
+            req_lines.append(f"💳 Карта: {body['card_number']}")
+        elif body.get("crypto_address"):
+            req_lines.append(f"🔑 Адрес: {body['crypto_address']}")
+        if body.get("bank_name"):
+            req_lines.append(f"Банк: {body['bank_name']}")
+        if body.get("card_holder"):
+            req_lines.append(f"Получатель: {body['card_holder']}")
+        if body.get("label"):
+            req_lines.append(f"Комментарий: {body['label']}")
+        if req_lines:
+            chat_msg = "📋 Реквизиты для оплаты:\n" + "\n".join(req_lines)
+            await db.execute(
+                text("""
+                    INSERT INTO deal_messages (order_id, sender_type, sender_id, message, is_read, created_at)
+                    VALUES (:order_id, 'OPERATOR', :sender_id, :message, 0, NOW())
+                """),
+                {"order_id": order_id, "sender_id": current_user.id, "message": chat_msg},
+            )
+            # Emit to frontend via socket
+            try:
+                msg_row = await db.execute(
+                    text("SELECT * FROM deal_messages WHERE order_id = :oid ORDER BY id DESC LIMIT 1"),
+                    {"oid": order_id},
+                )
+                msg = dict(msg_row.mappings().one())
+                await sio.emit_order_message({"orderId": order_id, "message": msg})
+            except Exception:
+                pass
+
     # Auto-save new requisite to bot_requisites for future reuse
     bot_id_val = updated_order.get("bot_id")
     if bot_id_val and isinstance(body, dict):
