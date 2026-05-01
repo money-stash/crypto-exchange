@@ -638,13 +638,21 @@ async def create_bot_requisite(
                     f"📋 <b>Реквизиты для оплаты</b>\n\n"
                     f"Заявка #{order_info.unique_id}\n"
                     f"Переведите рубли по реквизитам:\n\n"
-                    f"{details}"
+                    f"{details}\n\n"
+                    f"⚠️ После оплаты нажмите кнопку ниже."
                 )
+                pay_markup = InlineKeyboardMarkup(inline_keyboard=[[
+                    InlineKeyboardButton(
+                        text="✅ Я оплатил",
+                        callback_data=f"user_sent_crypto:{order_info.id}",
+                    )
+                ]])
                 await bot_manager.send_message(
                     order_info.bot_id,
                     order_info.tg_id,
                     text_msg,
                     parse_mode="HTML",
+                    reply_markup=pay_markup,
                 )
         except Exception as e:
             _log.warning(f"[BOTS] Failed to send requisites notification for order {body.order_id}: {e}")

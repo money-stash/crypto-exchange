@@ -566,28 +566,34 @@ async def set_order_requisites(
                     bot_id, int(tg_data.tg_id), msg_text,
                     parse_mode="HTML", reply_markup=keyboard
                 )
-            elif direction == "BUY" and card_number:
-                # Клиент должен оплатить рублями на карту
+            elif direction == "BUY":
+                sbp_phone = body.get("sbp_phone", "") if isinstance(body, dict) else ""
                 card_holder = body.get("card_holder", "") if isinstance(body, dict) else ""
                 bank_name = body.get("bank_name", "") if isinstance(body, dict) else ""
-                msg_text = (
-                    f"💳 <b>Оператор выставил реквизиты для заявки #{unique_id}</b>\n\n"
-                    f"Переведите <b>{updated_order.get('sum_rub', '')} ₽</b>\n"
-                    f"На карту: <code>{card_number}</code>\n"
-                    + (f"Банк: {bank_name}\n" if bank_name else "")
-                    + (f"Получатель: {card_holder}\n" if card_holder else "")
-                    + f"\n⚠️ После оплаты нажмите кнопку ниже."
-                )
-                keyboard = InlineKeyboardMarkup(inline_keyboard=[
-                    [InlineKeyboardButton(
-                        text="✅ Я оплатил",
-                        callback_data=f"user_sent_crypto:{order_id}"
-                    )]
-                ])
-                await bot_manager.send_message(
-                    bot_id, int(tg_data.tg_id), msg_text,
-                    parse_mode="HTML", reply_markup=keyboard
-                )
+                req_line = ""
+                if sbp_phone:
+                    req_line = f"Номер СБП: <code>{sbp_phone}</code>\n"
+                elif card_number:
+                    req_line = f"На карту: <code>{card_number}</code>\n"
+                if req_line:
+                    msg_text = (
+                        f"💳 <b>Оператор выставил реквизиты для заявки #{unique_id}</b>\n\n"
+                        f"Переведите <b>{updated_order.get('sum_rub', '')} ₽</b>\n"
+                        + req_line
+                        + (f"Банк: {bank_name}\n" if bank_name else "")
+                        + (f"Получатель: {card_holder}\n" if card_holder else "")
+                        + f"\n⚠️ После оплаты нажмите кнопку ниже."
+                    )
+                    keyboard = InlineKeyboardMarkup(inline_keyboard=[
+                        [InlineKeyboardButton(
+                            text="✅ Я оплатил",
+                            callback_data=f"user_sent_crypto:{order_id}"
+                        )]
+                    ])
+                    await bot_manager.send_message(
+                        bot_id, int(tg_data.tg_id), msg_text,
+                        parse_mode="HTML", reply_markup=keyboard
+                    )
     except Exception as e:
         logger.warning(f"Failed to notify user about requisites for order {order_id}: {e}")
 
