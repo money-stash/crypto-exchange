@@ -709,3 +709,155 @@ async def update_deposit(
 
     await db.commit()
     return {"message": "Deposits updated"}
+
+
+# ---------------------------------------------------------------------------
+# Operator crypto deposit — self-service (same flow as cashier deposit)
+# ---------------------------------------------------------------------------
+
+class OperatorDepositTopupRequest(BaseModel):
+    tx_hash: str
+    coin: str = "USDT"
+
+
+@router.get("/me/deposit")
+async def get_my_deposit(
+    current_user: Support = Depends(require_roles("OPERATOR")),
+    db: AsyncSession = Depends(get_db),
+):
+    from app.routers.cashiers import _get_deposit_wallet, _get_coin_rate_rub, DEPOSIT_COINS
+
+    dep_row = await db.execute(
+        text("SELECT deposit, deposit_paid, deposit_work FROM supports WHERE id = :uid"),
+        {"uid": current_user.id},
+    )
+    dep = dep_row.mappings().one_or_none()
+    deposit = float(dep["deposit"] or 0) if dep else 0.0
+    deposit_paid = float(dep["deposit_paid"] or 0) if dep else 0.0
+    deposit_work = float(dep["deposit_work"] or 0) if dep else 0.0
+    available = max(0.0, deposit - deposit_work)
+
+    wallets = {}
+    rates = {}
+    for coin in DEPOSIT_COINS:
+        wallets[coin] = await _get_deposit_wallet(db, coin)
+        rates[coin] = await _get_coin_rate_rub(db, coin)
+
+    return {
+        "deposit": deposit,
+        "deposit_paid": deposit_paid,
+        "deposit_work": deposit_work,
+        "available": available,
+        "wallets": wallets,
+        "rates": rates,
+    }
+
+
+@router.get("/me/deposit/history")
+async def get_my_deposit_history(
+    page: int = Query(1, ge=1),
+    limit: int = Query(20, ge=1, le=100),
+    current_user: Support = Depends(require_roles("OPERATOR")),
+    db: AsyncSession = Depends(get_db),
+):
+    offset = (page - 1) * limit
+    try:
+        rows = await db.execute(text("""
+            SELECT * FROM cashier_deposits
+            WHERE cashier_id = :uid
+            ORDER BY created_at DESC
+            LIMIT :limit OFFSET :offset
+        """), {"uid": current_user.id, "limit": limit, "offset": offset})
+        items = [dict(r._mapping) for r in rows]
+        total_row = await db.execute(
+            text("SELECT COUNT(*) FROM cashier_deposits WHERE cashier_id = :uid"),
+            {"uid": current_user.id},
+        )
+        total = total_row.scalar()
+    except Exception:
+        items = []
+        total = 0
+    return {"items": items, "total": total, "pages": max(1, -(-total // limit)), "page": page}
+
+
+@router.post("/me/deposit/topup")
+async def topup_my_deposit(
+    body: OperatorDepositTopupRequest,
+    current_user: Support = Depends(require_roles("OPERATOR")),
+    db: AsyncSession = Depends(get_db),
+):
+    from app.routers.cashiers import (
+        DEPOSIT_COINS, _get_deposit_wallet, _get_coin_rate_rub,
+        _verify_btc_ltc, _verify_usdt_trc20,
+    )
+
+    coin = body.coin.upper()
+    if coin not in DEPOSIT_COINS:
+        raise HTTPException(400, f"Неподдерживаемая монета. Допустимые: {', '.join(DEPOSIT_COINS)}")
+
+    tx_hash = body.tx_hash.strip()
+    if len(tx_hash) != 64:
+        raise HTTPException(400, "Неверный формат хеша транзакции (должно быть 64 символа)")
+
+    if coin in ("BTC", "LTC"):
+        tx_hash = tx_hash.lower()
+
+    dup = await db.execute(
+        text("SELECT id, status FROM cashier_deposits WHERE tx_hash = :tx"),
+        {"tx": tx_hash},
+    )
+    existing = dup.mappings().one_or_none()
+    if existing:
+        if existing["status"] == "CONFIRMED":
+            raise HTTPException(400, "Эта транзакция уже была зачтена")
+        elif existing["status"] == "PENDING":
+            raise HTTPException(400, "Эта транзакция уже ожидает подтверждения")
+
+    system_address = await _get_deposit_wallet(db, coin)
+    if not system_address:
+        raise HTTPException(500, f"Адрес депозита {coin} не настроен. Обратитесь к администратору.")
+
+    if coin in ("BTC", "LTC"):
+        received_amount = await _verify_btc_ltc(tx_hash, system_address, coin)
+    else:
+        received_amount = await _verify_usdt_trc20(tx_hash, system_address)
+
+    coin_rate_rub = await _get_coin_rate_rub(db, coin)
+    if coin_rate_rub <= 0:
+        raise HTTPException(500, f"Курс {coin} не найден. Повторите позже.")
+
+    amount_rub = round(received_amount * coin_rate_rub, 2)
+
+    if existing and existing["status"] == "REJECTED":
+        await db.execute(text("""
+            UPDATE cashier_deposits SET
+                cashier_id = :uid, coin = :coin,
+                amount_coin = :amount, btc_rate_rub = :rate, amount_rub = :rub,
+                status = 'CONFIRMED', reject_reason = NULL, confirmed_at = NOW()
+            WHERE tx_hash = :tx
+        """), {"uid": current_user.id, "coin": coin, "amount": received_amount,
+               "rate": coin_rate_rub, "rub": amount_rub, "tx": tx_hash})
+    else:
+        await db.execute(text("""
+            INSERT INTO cashier_deposits
+                (cashier_id, tx_hash, coin, amount_coin, btc_rate_rub, amount_rub, status, confirmed_at)
+            VALUES
+                (:uid, :tx, :coin, :amount, :rate, :rub, 'CONFIRMED', NOW())
+        """), {"uid": current_user.id, "tx": tx_hash, "coin": coin,
+               "amount": received_amount, "rate": coin_rate_rub, "rub": amount_rub})
+
+    await db.execute(
+        text("UPDATE supports SET deposit = deposit + :amount WHERE id = :uid"),
+        {"amount": amount_rub, "uid": current_user.id},
+    )
+    await db.commit()
+
+    decimals = 2 if coin == "USDT" else 8
+    return {
+        "success": True,
+        "coin": coin,
+        "received_amount": round(received_amount, decimals),
+        "coin_rate_rub": coin_rate_rub,
+        "credited_rub": amount_rub,
+        "message": f"Депозит пополнен на {amount_rub:,.2f} ₽  ({received_amount:.{decimals}f} {coin} × {coin_rate_rub:,.2f} ₽/{coin})",
+    }

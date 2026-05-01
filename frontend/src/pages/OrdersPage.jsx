@@ -1,6 +1,6 @@
 ﻿import React, { useState, useEffect, useCallback, useRef } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
-import { ordersApi } from '../services/api';
+import { ordersApi, supportsApi } from '../services/api';
 import { useAuth } from '../hooks/useAuth';
 import ResponsiveTable from '../components/ResponsiveTable';
 import { toast } from 'react-toastify';
@@ -54,6 +54,10 @@ const OrdersPage = () => {
   });
   const [takingOrderId, setTakingOrderId] = useState(null);
   const [filtersExpanded, setFiltersExpanded] = useState(false);
+  const [showDepositTopup, setShowDepositTopup] = useState(false);
+  const [depositInfo, setDepositInfo] = useState(null);
+  const [topupTxHash, setTopupTxHash] = useState('');
+  const [topupLoading, setTopupLoading] = useState(false);
   const processedPaymentConfirmationsRef = useRef(new Set());
   const processedOrderTakenToastsRef = useRef(new Set());
   const fetchOrdersRequestIdRef = useRef(0);
@@ -608,6 +612,35 @@ useEffect(() => {
     }
   };
 
+  const openDepositTopup = async () => {
+    try {
+      const res = await supportsApi.getMyDeposit();
+      setDepositInfo(res.data);
+    } catch {
+      toast.error('Не удалось загрузить данные депозита');
+      return;
+    }
+    setTopupTxHash('');
+    setShowDepositTopup(true);
+  };
+
+  const handleDepositTopup = async () => {
+    const hash = topupTxHash.trim();
+    if (!hash || hash.length !== 64) return toast.error('Введите корректный хеш транзакции (64 символа)');
+    setTopupLoading(true);
+    try {
+      const res = await supportsApi.topupMyDeposit({ tx_hash: hash, coin: 'USDT' });
+      toast.success(res.data.message);
+      setShowDepositTopup(false);
+      setTopupTxHash('');
+      fetchOperatorStats();
+    } catch (e) {
+      toast.error(e?.response?.data?.detail || 'Ошибка пополнения депозита');
+    } finally {
+      setTopupLoading(false);
+    }
+  };
+
   const handleFilterChange = (key, value) => {
     setFilters(prev => ({
       ...prev,
@@ -961,6 +994,13 @@ const handleWorkTabChange = (tab) => {
                 {loading || !operatorStats ? '—' : operatorStats.current_orders || 0}
               </span>
             </div>
+            <div className="w-px h-3.5 bg-gray-200 dark:bg-gray-700" />
+            <button
+              onClick={openDepositTopup}
+              className="flex items-center gap-1 px-2 py-0.5 text-xs font-medium bg-blue-600 hover:bg-blue-700 text-white rounded transition-colors"
+            >
+              + Пополнить депозит
+            </button>
           </div>
         )}
 
@@ -1111,6 +1151,57 @@ const handleWorkTabChange = (tab) => {
         />
       </div>
     </PageTransition>
+
+    {/* Deposit topup modal */}
+    {showDepositTopup && (
+      <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4">
+        <div className="bg-white dark:bg-gray-900 rounded-xl shadow-xl w-full max-w-md p-6 space-y-4">
+          <h2 className="text-base font-bold text-gray-900 dark:text-white">Пополнить депозит (USDT TRC20)</h2>
+
+          {depositInfo?.wallets?.USDT ? (
+            <div className="space-y-1">
+              <p className="text-xs text-gray-500">Адрес для пополнения:</p>
+              <p className="font-mono text-xs break-all bg-gray-100 dark:bg-gray-800 rounded p-2 select-all">
+                {depositInfo.wallets.USDT}
+              </p>
+              {depositInfo.rates?.USDT > 0 && (
+                <p className="text-xs text-gray-500">Курс: 1 USDT = {Number(depositInfo.rates.USDT).toLocaleString('ru-RU')} ₽</p>
+              )}
+            </div>
+          ) : (
+            <p className="text-xs text-red-500">Адрес депозита не настроен. Обратитесь к администратору.</p>
+          )}
+
+          <div className="space-y-1">
+            <label className="text-xs text-gray-600 dark:text-gray-400">Хеш транзакции (64 символа)</label>
+            <input
+              type="text"
+              value={topupTxHash}
+              onChange={e => setTopupTxHash(e.target.value)}
+              placeholder="Вставьте TxID транзакции..."
+              className="w-full px-3 py-2 text-sm border border-gray-300 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-800 text-gray-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-blue-500"
+            />
+            <p className="text-xs text-gray-400">{topupTxHash.trim().length} / 64 символов</p>
+          </div>
+
+          <div className="flex gap-2 justify-end">
+            <button
+              onClick={() => { setShowDepositTopup(false); setTopupTxHash(''); }}
+              className="px-4 py-2 text-sm text-gray-600 dark:text-gray-300 hover:bg-gray-100 dark:hover:bg-gray-800 rounded-lg transition-colors"
+            >
+              Отмена
+            </button>
+            <button
+              onClick={handleDepositTopup}
+              disabled={topupLoading || topupTxHash.trim().length !== 64 || !depositInfo?.wallets?.USDT}
+              className="px-4 py-2 text-sm font-medium bg-blue-600 hover:bg-blue-700 text-white rounded-lg transition-colors disabled:opacity-50"
+            >
+              {topupLoading ? 'Проверяем...' : 'Подтвердить пополнение'}
+            </button>
+          </div>
+        </div>
+      </div>
+    )}
   );
 };
 

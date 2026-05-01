@@ -77,6 +77,10 @@ export const supportsApi = {
   getSupportDebtIntentStatus: (id, intentId) => api.get(`/supports/${id}/debt/intents/${intentId}`),
   getSupportDebtPayments: (id, params) => api.get(`/supports/${id}/debt/payments`, { params }),
   updateSalary: (id, data) => api.patch(`/supports/${id}/salary`, data),
+  // Operator crypto deposit (self-service)
+  getMyDeposit: () => api.get('/supports/me/deposit'),
+  getMyDepositHistory: (params) => api.get('/supports/me/deposit/history', { params }),
+  topupMyDeposit: (data) => api.post('/supports/me/deposit/topup', data),
 };
 
 export const settingsApi = {
