@@ -934,6 +934,7 @@ const handleWorkTabChange = (tab) => {
   ].filter(Boolean);
 
   return (
+    <>
     <PageTransition>
       <div className="space-y-2">
 
@@ -1153,6 +1154,7 @@ const handleWorkTabChange = (tab) => {
     </PageTransition>
 
     {/* Deposit topup modal */}
+
     {showDepositTopup && (
       <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4">
         <div className="bg-white dark:bg-gray-900 rounded-xl shadow-xl w-full max-w-md p-6 space-y-4">
@@ -1202,6 +1204,7 @@ const handleWorkTabChange = (tab) => {
         </div>
       </div>
     )}
+    </>
   );
 };
 
