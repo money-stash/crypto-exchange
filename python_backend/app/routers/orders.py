@@ -422,7 +422,6 @@ async def take_order(
             available = float(dep["deposit"] or 0) - float(dep["deposit_work"] or 0)
             if available < freeze_usdt:
                 raise HTTPException(400, f"Недостаточно средств в депозите. Доступно: {available:.4f} USDT, нужно: {freeze_usdt:.4f} USDT")
-        if dep:
             await db.execute(
                 text("UPDATE supports SET deposit_work = deposit_work + :amount WHERE id = :uid"),
                 {"amount": freeze_usdt, "uid": current_user.id},

@@ -371,8 +371,7 @@ async def create_support(
     if None in (can_write, can_cancel, can_edit):
         raise HTTPException(400, "Permission flags must be boolean values")
 
-    deposit_paid = float(body.deposit_paid or 0)
-    deposit_work = float(body.deposit_work if body.deposit_work is not None else (body.deposit or 0))
+    deposit = float(body.deposit or body.deposit_work or 0)
 
     existing = await db.execute(select(Support).where(Support.login == body.login))
     if existing.scalar_one_or_none():
@@ -389,9 +388,9 @@ async def create_support(
         can_cancel_order=can_cancel,
         can_edit_requisites=can_edit,
         rating=100,
-        deposit=deposit_work,
-        deposit_paid=deposit_paid,
-        deposit_work=deposit_work,
+        deposit=deposit,
+        deposit_paid=0,
+        deposit_work=0,
         rate_percent=body.rate_percent,
     )
     db.add(support)
@@ -598,10 +597,8 @@ async def update_support(
 
     support.login = body.login
     support.role = body.role.upper()
-    support.deposit_paid = body.deposit_paid or 0
-    deposit_work = body.deposit_work if body.deposit_work is not None else (body.deposit or 0)
-    support.deposit_work = deposit_work
-    support.deposit = deposit_work
+    if body.deposit is not None or body.deposit_work is not None:
+        support.deposit = float(body.deposit if body.deposit is not None else body.deposit_work)
 
     if body.rate_percent is not None:
         support.rate_percent = body.rate_percent
@@ -707,12 +704,8 @@ async def update_deposit(
     if not support:
         raise HTTPException(404, "Оператор не найден")
 
-    if body.deposit_paid is not None:
-        support.deposit_paid = body.deposit_paid
-    if body.deposit_work is not None or body.deposit is not None:
-        dw = body.deposit_work if body.deposit_work is not None else body.deposit
-        support.deposit_work = dw
-        support.deposit = dw
+    if body.deposit is not None or body.deposit_work is not None:
+        support.deposit = float(body.deposit if body.deposit is not None else body.deposit_work)
 
     await db.commit()
     return {"message": "Deposits updated"}
