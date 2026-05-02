@@ -143,8 +143,8 @@ async def cb_referral_payout(callback: CallbackQuery, bot_config: dict) -> None:
 
         # Create withdrawal request
         await db.execute(text("""
-            INSERT INTO referrals_withdraw (userbot_id, amount_rub, currency, status)
-            VALUES (:ubid, :amount, 'RUB', 'CREATED')
+            INSERT INTO referrals_withdraw (userbot_id, amount_rub, amount_crypto, currency, status)
+            VALUES (:ubid, :amount, 0, 'RUB', 'CREATED')
         """), {"ubid": ub["id"], "amount": balance})
         await db.commit()
 
