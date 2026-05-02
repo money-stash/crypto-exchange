@@ -9,6 +9,8 @@ from aiogram.types import CallbackQuery, InlineKeyboardMarkup, InlineKeyboardBut
 from aiogram.utils.keyboard import InlineKeyboardBuilder
 from sqlalchemy import text
 
+from aiogram import Bot
+
 from app.database import AsyncSessionLocal
 from app.services.referral_service import (
     get_user_bot_referral_stats,
@@ -56,7 +58,7 @@ async def cb_cabinet(callback: CallbackQuery, bot_config: dict) -> None:
 
 
 @router.callback_query(lambda c: c.data == "cabinet_referral")
-async def cb_referral(callback: CallbackQuery, bot_config: dict) -> None:
+async def cb_referral(callback: CallbackQuery, bot_config: dict, bot: Bot) -> None:
     tg_id = callback.from_user.id
     bot_id = bot_config["id"]
 
@@ -70,7 +72,8 @@ async def cb_referral(callback: CallbackQuery, bot_config: dict) -> None:
         tiers = await get_tiers(db)
         first_bonus = await get_first_bonus_rub(db)
 
-    ref_link = f"https://t.me/{bot_config['identifier']}?start=ref{ub['id']}"
+    bot_info = await bot.get_me()
+    ref_link = f"https://t.me/{bot_info.username}?start=ref{ub['id']}"
 
     lines = [
         "👥 <b>Реферальная программа</b>\n",
