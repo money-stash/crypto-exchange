@@ -21,8 +21,6 @@ router = APIRouter(prefix="/api/coupons", tags=["coupons"])
 
 def _assert_access(current_user) -> None:
     role = (current_user.role or "").upper()
-    if role == "CASHIER":
-        raise HTTPException(403, "Нет доступа к промокодам")
     if role != "SUPERADMIN" and not bool(current_user.can_use_coupons):
         raise HTTPException(403, "Доступ к промокодам не предоставлен администратором")
 
@@ -240,7 +238,7 @@ async def get_access_list(current_user=Depends(get_current_user)):
         rows = await db.execute(text("""
             SELECT id, login, role, can_use_coupons
             FROM supports
-            WHERE role NOT IN ('CASHIER', 'SUPERADMIN') AND is_active = 1
+            WHERE role != 'SUPERADMIN' AND is_active = 1
             ORDER BY role, login
         """))
         staff = [dict(r) for r in rows.mappings()]
