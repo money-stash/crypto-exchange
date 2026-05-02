@@ -230,7 +230,7 @@ async def get_user_by_id(
         SELECT
             COUNT(*)                   AS total_bonuses,
             COUNT(DISTINCT order_id)   AS bonus_transactions,
-            MAX(created_at)            AS last_bonus_date
+            MAX(rb.created_at)         AS last_bonus_date
         FROM referral_bonuses rb
         JOIN user_bots ub ON rb.referrer_userbot_id = ub.id
         WHERE ub.user_id = :uid
@@ -240,13 +240,18 @@ async def get_user_by_id(
     user_data.update(dict(os._mapping))
     user_data["recent_orders"] = [dict(r._mapping) for r in recent.fetchall()]
     user_data["user_bots"] = user_bots_list
-    user_data["total_referrals"] = int(rs.total_referrals or 0)
-    user_data["active_referrals"] = int(rs.active_referrals or 0)
-    user_data["referral_orders"] = int(rs.referral_orders or 0)
-    user_data["referral_volume"] = float(rs.referral_volume or 0)
-    user_data["total_bonuses"] = float(bs.total_bonuses or 0)
-    user_data["bonus_transactions"] = int(bs.bonus_transactions or 0)
-    user_data["last_bonus_date"] = bs.last_bonus_date
+    user_data["referral_stats"] = {
+        "total_referrals": int(rs.total_referrals or 0),
+        "active_referrals": int(rs.active_referrals or 0),
+        "referral_orders": int(rs.referral_orders or 0),
+        "referral_volume": float(rs.referral_volume or 0),
+        "total_bonuses": float(bs.total_bonuses or 0),
+        "bonus_transactions": int(bs.bonus_transactions or 0),
+        "last_bonus_date": bs.last_bonus_date,
+    }
+    # Keep flat keys for backwards compat
+    user_data["total_referrals"] = user_data["referral_stats"]["total_referrals"]
+    user_data["active_referrals"] = user_data["referral_stats"]["active_referrals"]
     return user_data
 
 

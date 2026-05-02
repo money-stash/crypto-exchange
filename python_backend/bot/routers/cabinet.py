@@ -1,15 +1,14 @@
 """
-Bot cabinet: referral program page + payout request.
+Bot cabinet: referral program page + payout request with wallet address FSM.
 """
 import logging
 from decimal import Decimal
 
-from aiogram import Router
-from aiogram.types import CallbackQuery, InlineKeyboardMarkup, InlineKeyboardButton
+from aiogram import Router, Bot, F
+from aiogram.fsm.context import FSMContext
+from aiogram.types import CallbackQuery, InlineKeyboardMarkup, InlineKeyboardButton, Message
 from aiogram.utils.keyboard import InlineKeyboardBuilder
 from sqlalchemy import text
-
-from aiogram import Bot
 
 from app.database import AsyncSessionLocal
 from app.services.referral_service import (
@@ -17,6 +16,7 @@ from app.services.referral_service import (
     get_tiers,
     get_first_bonus_rub,
 )
+from bot.states.order_states import ReferralPayoutStates
 
 router = Router()
 logger = logging.getLogger(__name__)
@@ -77,16 +77,16 @@ async def cb_referral(callback: CallbackQuery, bot_config: dict, bot: Bot) -> No
 
     lines = [
         "👥 <b>Реферальная программа</b>\n",
-        f"🔗 <b>Ваша ссылка:</b>",
+        "🔗 <b>Ваша ссылка:</b>",
         f"<code>{ref_link}</code>\n",
-        f"📊 <b>Ваша статистика:</b>",
+        "📊 <b>Ваша статистика:</b>",
         f"• Приглашено пользователей: <b>{stats['referralsCount']}</b>",
         f"• Заявок рефералов: <b>{stats['referralsOrders']}</b>",
         f"• Оборот рефералов: <b>{stats['referralsSum']:,.0f} ₽</b>",
         f"• Текущий уровень: <b>{stats['tierLabel']}</b>",
         f"• Процент вознаграждения: <b>{stats['currentPercent']}%</b>",
         "",
-        f"💰 <b>Финансы:</b>",
+        "💰 <b>Финансы:</b>",
         f"• Всего заработано: <b>{stats['earned']:,.2f} ₽</b>",
         f"• Выплачено: <b>{stats['paidOut']:,.2f} ₽</b>",
         f"• Доступно к выводу: <b>{stats['balance']:,.2f} ₽</b>",
@@ -106,16 +106,17 @@ async def cb_referral(callback: CallbackQuery, bot_config: dict, bot: Bot) -> No
             else:
                 lines.append(f"• {label}: от {mn:,} ₽ → {t['bonus_percent']}%")
 
-    text_out = "\n".join(lines)
     await callback.message.edit_text(
-        text_out,
+        "\n".join(lines),
         reply_markup=_referral_keyboard(has_balance=stats["balance"] > 0),
     )
     await callback.answer()
 
 
 @router.callback_query(lambda c: c.data == "referral_payout")
-async def cb_referral_payout(callback: CallbackQuery, bot_config: dict) -> None:
+async def cb_referral_payout(
+    callback: CallbackQuery, state: FSMContext, bot_config: dict
+) -> None:
     tg_id = callback.from_user.id
     bot_id = bot_config["id"]
 
@@ -132,7 +133,6 @@ async def cb_referral_payout(callback: CallbackQuery, bot_config: dict) -> None:
             await callback.answer("Нет средств для вывода", show_alert=True)
             return
 
-        # Check for existing pending withdrawal
         existing = await db.execute(
             text("SELECT id FROM referrals_withdraw WHERE userbot_id = :ubid AND status = 'CREATED'"),
             {"ubid": ub["id"]},
@@ -141,20 +141,59 @@ async def cb_referral_payout(callback: CallbackQuery, bot_config: dict) -> None:
             await callback.answer("У вас уже есть активная заявка на выплату", show_alert=True)
             return
 
-        # Create withdrawal request
-        await db.execute(text("""
-            INSERT INTO referrals_withdraw (userbot_id, amount_rub, amount_crypto, currency, status)
-            VALUES (:ubid, :amount, 0, 'RUB', 'CREATED')
-        """), {"ubid": ub["id"], "amount": balance})
-        await db.commit()
+    cancel_kb = InlineKeyboardBuilder()
+    cancel_kb.row(InlineKeyboardButton(text="❌ Отмена", callback_data="referral_payout_cancel"))
 
-    builder = InlineKeyboardBuilder()
-    builder.row(InlineKeyboardButton(text="◀️ Назад", callback_data="cabinet_referral"))
+    await state.set_state(ReferralPayoutStates.entering_wallet)
+    await state.update_data(payout_amount=str(balance), userbot_id=ub["id"], bot_id=bot_id)
 
     await callback.message.edit_text(
-        f"✅ <b>Заявка на выплату создана</b>\n\n"
-        f"Сумма: <b>{float(balance):,.2f} ₽</b>\n\n"
-        f"Администратор обработает вашу заявку в ближайшее время.",
-        reply_markup=builder.as_markup(),
+        f"💸 <b>Вывод {float(balance):,.2f} ₽</b>\n\n"
+        "Введите адрес вашего кошелька или реквизиты для получения выплаты:",
+        reply_markup=cancel_kb.as_markup(),
     )
     await callback.answer()
+
+
+@router.callback_query(lambda c: c.data == "referral_payout_cancel")
+async def cb_payout_cancel(
+    callback: CallbackQuery, state: FSMContext, bot_config: dict, bot: Bot
+) -> None:
+    await state.clear()
+    # Redirect back to referral page
+    await cb_referral(callback, bot_config, bot)
+
+
+@router.message(ReferralPayoutStates.entering_wallet)
+async def payout_wallet_entered(
+    message: Message, state: FSMContext, bot_config: dict
+) -> None:
+    wallet = message.text.strip()
+    if not wallet:
+        await message.answer("Пожалуйста, введите адрес кошелька.")
+        return
+
+    data = await state.get_data()
+    balance = Decimal(data["payout_amount"])
+    userbot_id = data["userbot_id"]
+
+    async with AsyncSessionLocal() as db:
+        await db.execute(text("""
+            INSERT INTO referrals_withdraw
+                (userbot_id, amount_rub, amount_crypto, currency, wallet_address, status)
+            VALUES (:ubid, :amount, 0, 'RUB', :wallet, 'CREATED')
+        """), {"ubid": userbot_id, "amount": balance, "wallet": wallet})
+        await db.commit()
+
+    await state.clear()
+
+    builder = InlineKeyboardBuilder()
+    builder.row(InlineKeyboardButton(text="◀️ В личный раздел", callback_data="menu_cabinet"))
+
+    await message.answer(
+        f"✅ <b>Заявка на выплату создана</b>\n\n"
+        f"Сумма: <b>{float(balance):,.2f} ₽</b>\n"
+        f"Реквизиты: <code>{wallet}</code>\n\n"
+        "Администратор обработает вашу заявку в ближайшее время.",
+        reply_markup=builder.as_markup(),
+    )

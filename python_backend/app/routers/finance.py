@@ -49,9 +49,7 @@ async def get_finance_stats(
         where_parts.append("o.support_id = :uid")
         params["uid"] = filter_uid
 
-    if operator_type and operator_type != "all":
-        where_parts.append("sp.operator_type = :op_type")
-        params["op_type"] = operator_type
+    # operator_type filter removed — column does not exist in supports table
 
     where = " AND ".join(where_parts)
 
@@ -76,7 +74,7 @@ async def get_finance_stats(
             text(f"""
                 SELECT COUNT(*) AS orders_count, COALESCE(SUM(o.sum_rub), 0) AS volume_rub,
                        0 AS profit_rub, 0 AS avg_profit_rub
-                FROM orders o WHERE {where.replace('sp.operator_type = :op_type', '1=1')}
+                FROM orders o WHERE {where}
             """),
             {k: v for k, v in params.items() if k != "op_type"},
         )
@@ -89,7 +87,6 @@ async def get_finance_stats(
                 SELECT
                     sp.id AS support_id,
                     sp.login,
-                    sp.operator_type,
                     COUNT(*) AS orders_count,
                     COALESCE(SUM(o.sum_rub), 0) AS volume_rub,
                     COALESCE(SUM(o.operator_profit_rub), 0) AS profit_rub,
@@ -97,7 +94,7 @@ async def get_finance_stats(
                 FROM orders o
                 LEFT JOIN supports sp ON sp.id = o.support_id
                 WHERE {where}
-                GROUP BY sp.id, sp.login, sp.operator_type
+                GROUP BY sp.id, sp.login
                 ORDER BY volume_rub DESC
             """),
             params,
@@ -107,7 +104,7 @@ async def get_finance_stats(
         try:
             op_rows = await db.execute(
                 text(f"""
-                    SELECT sp.id AS support_id, sp.login, 'manual' AS operator_type,
+                    SELECT sp.id AS support_id, sp.login,
                            COUNT(*) AS orders_count, COALESCE(SUM(o.sum_rub), 0) AS volume_rub,
                            0 AS profit_rub, 0 AS shifts_count
                     FROM orders o
@@ -269,7 +266,7 @@ async def export_finance(
                 o.sum_rub, o.amount_coin, o.rate_rub,
                 o.operator_received_usdt, o.operator_rate_rub, o.operator_profit_rub,
                 o.completed_at, o.shift_id,
-                sp.login AS operator_login, sp.operator_type
+                sp.login AS operator_login
             FROM orders o
             LEFT JOIN supports sp ON sp.id = o.support_id
             WHERE o.status = 'COMPLETED'
@@ -286,14 +283,14 @@ async def export_finance(
     writer.writerow([
         "ID", "Уник.ID", "Направление", "Монета", "Сумма RUB", "Кол-во крипты",
         "Курс", "Получено USDT", "Фактический курс", "Прибыль RUB",
-        "Завершена", "Смена", "Оператор", "Тип оператора"
+        "Завершена", "Смена", "Оператор"
     ])
     for r in data:
         writer.writerow([
             r["id"], r["unique_id"], r["dir"], r["coin"],
             r["sum_rub"], r["amount_coin"], r["rate_rub"],
             r["operator_received_usdt"], r["operator_rate_rub"], r["operator_profit_rub"],
-            r["completed_at"], r["shift_id"], r["operator_login"], r["operator_type"]
+            r["completed_at"], r["shift_id"], r["operator_login"]
         ])
 
     output.seek(0)
@@ -362,9 +359,7 @@ async def get_orders_detail(
         where += " AND o.support_id = :uid"
         params["uid"] = current_user.id
 
-    if operator_type and operator_type != "all":
-        where += " AND sp.operator_type = :op_type"
-        params["op_type"] = operator_type
+    # operator_type filter removed — column does not exist in supports table
 
     # Get current USDT rate for salary calculation
     usdt_row = await db.execute(

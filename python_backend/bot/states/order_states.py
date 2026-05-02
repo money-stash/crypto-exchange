@@ -21,3 +21,7 @@ class SellStates(StatesGroup):
 
 class OrderChatStates(StatesGroup):
     in_order_chat = State()
+
+
+class ReferralPayoutStates(StatesGroup):
+    entering_wallet = State()
