@@ -596,10 +596,11 @@ async def complete_deal(
         )
         ub_data = ub_row.fetchone()
         if ub_data and ub_data.user_bot_id:
+            profit = float(updated_order.get("operator_profit_rub") or 0)
             bonus_result = await process_referral_bonus(
                 db=db,
                 order_id=order_id,
-                order_sum=float(updated_order.get("sum_rub") or 0),
+                order_sum=profit,
                 referred_user_bot_id=ub_data.user_bot_id,
                 bot_id=updated_order.get("bot_id"),
             )
