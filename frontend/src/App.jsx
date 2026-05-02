@@ -31,6 +31,7 @@ import FinancePage from './pages/FinancePage';
 import CashierPage from './pages/CashierPage';
 import CashiersManagementPage from './pages/CashiersManagementPage';
 import CouponsPage from './pages/CouponsPage';
+import ReferralSystemPage from './pages/ReferralSystemPage';
 
 const ProtectedRoute = ({ children, requiredRole = null }) => {
   const { isAuthenticated, user, loading } = useAuth();
@@ -179,6 +180,11 @@ const AppRoutes = () => {
             <Route path="coupons" element={
               <ProtectedRoute>
                 <CouponsPage />
+              </ProtectedRoute>
+            } />
+            <Route path="referral-system" element={
+              <ProtectedRoute requiredRole={['EX_ADMIN', 'SUPERADMIN']}>
+                <ReferralSystemPage />
               </ProtectedRoute>
             } />
           </Route>

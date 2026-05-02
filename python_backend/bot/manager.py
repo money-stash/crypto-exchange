@@ -13,6 +13,7 @@ from bot.routers import start as start_router
 from bot.routers import buy as buy_router
 from bot.routers import sell as sell_router
 from bot.routers import order_chat as order_chat_router
+from bot.routers import cabinet as cabinet_router
 
 logger = logging.getLogger(__name__)
 
@@ -144,7 +145,8 @@ class BotManager:
             # so we reset _parent_router to None to allow the same Router singletons
             # to be re-included when a second bot starts or this bot restarts.
             for r in (buy_router.router, sell_router.router,
-                      order_chat_router.router, start_router.router):
+                      order_chat_router.router, cabinet_router.router,
+                      start_router.router):
                 r._parent_router = None  # detach from any previous dispatcher
                 dp.include_router(r)
                 r._parent_router = None  # keep detached so next bot can include it too

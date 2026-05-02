@@ -610,7 +610,28 @@ INSERT IGNORE INTO rates (coin, rate_rub) VALUES
     ('USDT', 0);
 
 -- ─────────────────────────────────────────────
---  32. coupons  (промокоды)
+--  32. referral_level_tiers  (конфигурируемые уровни реф. программы)
+-- ─────────────────────────────────────────────
+CREATE TABLE IF NOT EXISTS referral_level_tiers (
+    id            BIGINT AUTO_INCREMENT PRIMARY KEY,
+    min_sum_rub   DECIMAL(20,2) NOT NULL DEFAULT 0,
+    max_sum_rub   DECIMAL(20,2),       -- NULL = нет верхнего предела (топ-уровень)
+    bonus_percent DECIMAL(6,2) NOT NULL DEFAULT 0,
+    label         VARCHAR(64),
+    sort_order    INT NOT NULL DEFAULT 0,
+    created_at    DATETIME DEFAULT NOW()
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+
+INSERT IGNORE INTO referral_level_tiers (id, min_sum_rub, max_sum_rub, bonus_percent, label, sort_order) VALUES
+    (1,       100,    10000,  20, 'Базовый',      1),
+    (2,     10000,   100000,  25, 'Продвинутый',  2),
+    (3,    100000,  1000000,  30, 'VIP',          3),
+    (4,   1000000,     NULL,  40, 'VIP+',         4);
+
+INSERT IGNORE INTO system_settings (`key`, value) VALUES ('referral_first_bonus_rub', '0');
+
+-- ─────────────────────────────────────────────
+--  33. coupons  (промокоды)
 -- ─────────────────────────────────────────────
 CREATE TABLE IF NOT EXISTS coupons (
     id                    BIGINT AUTO_INCREMENT PRIMARY KEY,
@@ -685,7 +706,10 @@ MIGRATIONS = [
     ("supports", "daily_rate_usd",       "DECIMAL(10,2) DEFAULT 0"),
     ("supports", "per_order_rate_usd",   "DECIMAL(10,2) DEFAULT 0"),
     ("operator_shifts", "actual_duration_min", "INT"),
-    ("supports",        "can_use_coupons",      "TINYINT(1) DEFAULT 0"),
+    ("supports",        "can_use_coupons",           "TINYINT(1) DEFAULT 0"),
+    ("user_bots",       "custom_referral_percent",   "DECIMAL(6,2) NULL"),
+    ("user_bots",       "custom_referral_set_at",    "DATETIME NULL"),
+    ("user_bots",       "first_bonus_paid",          "TINYINT(1) DEFAULT 0"),
     ("orders",          "coupon_id",             "BIGINT"),
     ("orders",          "coupon_discount_rub",   "DECIMAL(14,2) DEFAULT 0"),
 ]

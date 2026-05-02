@@ -89,7 +89,8 @@ const Layout = () => {
     ...((isExAdmin || user?.role === 'SUPERADMIN') ? [
       { name: 'Боты', href: '/bots', icon: CommandLineIcon },
       { name: 'Рассылки', href: '/mailings', icon: EnvelopeIcon },
-      { name: 'Реферальная система', href: '/referral-withdrawals', icon: Download }
+      { name: 'Рефералы', href: '/referral-withdrawals', icon: Download },
+      { name: 'Реф. уровни', href: '/referral-system', icon: BarChart3 }
     ] : []),
     ...((isExAdmin || user?.role === 'SUPERADMIN') ? [{ name: 'Пользователи', href: '/users', icon: UsersIcon }] : []),
     ...(isManager ? [{ name: 'Настройки', href: '/settings', icon: CogIcon }] : []),

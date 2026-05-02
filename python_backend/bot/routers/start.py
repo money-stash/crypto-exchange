@@ -27,7 +27,10 @@ def build_main_menu(bot_config: dict) -> InlineKeyboardMarkup:
     return builder.as_markup()
 
 
-async def _get_or_create_user(tg_id: int, username: str | None, bot_id: int) -> None:
+async def _get_or_create_user(
+    tg_id: int, username: str | None, bot_id: int,
+    referral_code: str | None = None,
+) -> None:
     async with AsyncSessionLocal() as db:
         # Find or create base user
         row = await db.execute(
@@ -44,18 +47,31 @@ async def _get_or_create_user(tg_id: int, username: str | None, bot_id: int) -> 
             )
             user_id = r.lastrowid
 
+        # Resolve invited_by from referral code
+        invited_by = None
+        if referral_code:
+            ref_row = await db.execute(
+                text("SELECT id FROM user_bots WHERE referral_code = :code AND bot_id = :bid"),
+                {"code": referral_code, "bid": bot_id},
+            )
+            ref_ub = ref_row.fetchone()
+            if ref_ub:
+                invited_by = ref_ub.id
+
         # Find or create user_bot link
         ub = await db.execute(
             text("SELECT id FROM user_bots WHERE user_id = :uid AND bot_id = :bid"),
             {"uid": user_id, "bid": bot_id}
         )
-        if not ub.fetchone():
+        existing = ub.fetchone()
+        if not existing:
             await db.execute(
                 text("""
-                    INSERT INTO user_bots (user_id, bot_id, tg_id, username)
-                    VALUES (:uid, :bid, :tg_id, :username)
+                    INSERT INTO user_bots (user_id, bot_id, tg_id, username, invited_by)
+                    VALUES (:uid, :bid, :tg_id, :username, :invited_by)
                 """),
-                {"uid": user_id, "bid": bot_id, "tg_id": tg_id, "username": username}
+                {"uid": user_id, "bid": bot_id, "tg_id": tg_id,
+                 "username": username, "invited_by": invited_by}
             )
 
         await db.commit()
@@ -66,8 +82,14 @@ async def cmd_start(message: Message, bot_config: dict) -> None:
     tg_id = message.from_user.id
     username = message.from_user.username
 
+    # Extract referral code from /start refXXX
+    referral_code = None
+    args = message.text.split(maxsplit=1)
+    if len(args) > 1 and args[1].startswith("ref"):
+        referral_code = args[1]
+
     try:
-        await _get_or_create_user(tg_id, username, bot_config["id"])
+        await _get_or_create_user(tg_id, username, bot_config["id"], referral_code)
     except Exception as e:
         logger.error(f"Failed to get/create user {tg_id}: {e}")
 
@@ -88,10 +110,9 @@ async def cb_main_menu(callback: CallbackQuery, bot_config: dict) -> None:
     await callback.answer()
 
 
-@router.callback_query(lambda c: c.data in ("menu_cabinet", "menu_reviews", "menu_contacts"))
+@router.callback_query(lambda c: c.data in ("menu_reviews", "menu_contacts"))
 async def cb_menu_stub(callback: CallbackQuery) -> None:
     stubs = {
-        "menu_cabinet": "👤 Личный раздел в разработке",
         "menu_reviews": "⭐ Рейтинг в разработке",
         "menu_contacts": "📲 Контакты в разработке",
     }

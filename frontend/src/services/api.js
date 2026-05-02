@@ -368,4 +368,16 @@ export const cashiersApi = {
   markMyChatRead: () => api.post('/cashiers/me/chat/read'),
 };
 
+export const referralLevelsApi = {
+  getTiers: () => api.get('/referral-levels/tiers'),
+  createTier: (data) => api.post('/referral-levels/tiers', data),
+  updateTier: (id, data) => api.patch(`/referral-levels/tiers/${id}`, data),
+  deleteTier: (id) => api.delete(`/referral-levels/tiers/${id}`),
+  getFirstBonus: () => api.get('/referral-levels/first-bonus'),
+  setFirstBonus: (amount) => api.post('/referral-levels/first-bonus', { amount }),
+  setCustomPercent: (userBotId, percent) => api.patch(`/referral-levels/users/${userBotId}/custom-percent`, { percent }),
+  getUserStats: (userBotId, botId) => api.get(`/referral-levels/users/${userBotId}/stats`, { params: { bot_id: botId } }),
+  getGlobalStats: (botId) => api.get('/referral-levels/global-stats', botId ? { params: { bot_id: botId } } : {}),
+};
+
 export default api;
