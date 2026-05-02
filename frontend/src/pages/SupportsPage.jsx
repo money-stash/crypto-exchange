@@ -82,6 +82,7 @@ const SupportsPage = () => {
     can_write_chat: true,
     can_cancel_order: true,
     can_edit_requisites: true,
+    can_use_coupons: false,
     deposit: 0,
     rate_percent: 0,
     daily_rate_usd: 0,
@@ -95,6 +96,7 @@ const SupportsPage = () => {
     can_write_chat: true,
     can_cancel_order: true,
     can_edit_requisites: true,
+    can_use_coupons: false,
     deposit: 0,
     rate_percent: 0,
     daily_rate_usd: 0,
@@ -340,6 +342,7 @@ const SupportsPage = () => {
         can_write_chat: true,
         can_cancel_order: true,
         can_edit_requisites: true,
+        can_use_coupons: false,
         deposit: 0,
         rate_percent: 0,
         daily_rate_usd: 0,
@@ -413,6 +416,7 @@ const SupportsPage = () => {
         can_write_chat: Boolean(editSupport.can_write_chat),
         can_cancel_order: Boolean(editSupport.can_cancel_order),
         can_edit_requisites: Boolean(editSupport.can_edit_requisites),
+        can_use_coupons: Boolean(editSupport.can_use_coupons),
         deposit: editSupport.deposit,
         rate_percent: editSupport.rate_percent
       };
@@ -513,6 +517,7 @@ const SupportsPage = () => {
       can_write_chat: Number(support.can_write_chat ?? 1) === 1,
       can_cancel_order: Number(support.can_cancel_order ?? 1) === 1,
       can_edit_requisites: Number(support.can_edit_requisites ?? 1) === 1,
+      can_use_coupons: Number(support.can_use_coupons ?? 0) === 1,
       deposit: parseFloat(support.deposit) || 0,
       rate_percent: getSupportRatePercent(support),
       newPassword: ''
@@ -1157,6 +1162,14 @@ const SupportsPage = () => {
                   title="Возможность менять реквизиты"
                   description="Оператор сможет отправлять новые реквизиты по заявке."
                 />
+                {newSupport.role !== 'cashier' && (
+                  <PermissionToggle
+                    checked={newSupport.can_use_coupons}
+                    onChange={(e) => setNewSupport(prev => ({ ...prev, can_use_coupons: e.target.checked }))}
+                    title="Доступ к промокодам"
+                    description="Сотрудник сможет создавать и управлять промокодами."
+                  />
+                )}
               </div>
               <div>
                 <label className="form-label mb-2">
@@ -1369,6 +1382,14 @@ const SupportsPage = () => {
                   title="Возможность менять реквизиты"
                   description="Оператор сможет отправлять новые реквизиты по заявке."
                 />
+                {editSupport.role !== 'cashier' && editSupport.role !== 'CASHIER' && (
+                  <PermissionToggle
+                    checked={editSupport.can_use_coupons}
+                    onChange={(e) => setEditSupport(prev => ({ ...prev, can_use_coupons: e.target.checked }))}
+                    title="Доступ к промокодам"
+                    description="Сотрудник сможет создавать и управлять промокодами."
+                  />
+                )}
               </div>
               <div>
                 <label className="form-label mb-2">

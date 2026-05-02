@@ -65,6 +65,7 @@ export const supportsApi = {
   updateDeposit: (id, data) => api.patch(`/supports/${id}/deposit`, data),
   getOperatorsRating: () => api.get('/supports/rating/top'),
   getOperatorOrders: (id, params) => api.get(`/supports/${id}/operator-orders`, { params }),
+  getOperatorOrdersWithStats: (id, params) => api.get(`/supports/${id}/operator-orders`, { params }),
   getMyDebt: () => api.get('/supports/me/debt'),
   createMyDebtIntent: (requestedUsdt) => api.post('/supports/me/debt/intents', { requested_usdt: requestedUsdt }),
   getMyDebtIntentStatus: (intentId) => api.get(`/supports/me/debt/intents/${intentId}`),
@@ -291,6 +292,17 @@ export const financeApi = {
   getPurchases: (params) => api.get('/finance/purchases', { params }),
   addPurchase: (data) => api.post('/finance/purchases', data),
   deletePurchase: (id) => api.delete(`/finance/purchases/${id}`),
+  getProfitStats: (params) => api.get('/finance/profit-stats', { params }),
+};
+
+export const couponsApi = {
+  list: () => api.get('/coupons'),
+  create: (data) => api.post('/coupons', data),
+  update: (id, data) => api.patch(`/coupons/${id}`, data),
+  remove: (id) => api.delete(`/coupons/${id}`),
+  validate: (data) => api.post('/coupons/validate', data),
+  getAccessList: () => api.get('/coupons/access-list'),
+  setAccess: (supportId, enabled) => api.patch(`/coupons/access/${supportId}`, { can_use_coupons: enabled }),
 };
 
 export const auditLogsApi = {

@@ -494,7 +494,7 @@ function CashiersTab({ teams }) {
                       {c.cards_at_limit > 0 && <span className="ml-1 text-yellow-500">· {c.cards_at_limit} на лимите</span>}
                     </p>
                     <p className={`text-xs mt-0.5 ${(c.deposit - c.deposit_work) <= 0 ? 'text-red-500' : 'text-green-600 dark:text-green-400'}`}>
-                      Деп: {fmtRub(c.deposit - (c.deposit_work || 0))} ₽ своб.
+                      Деп: {fmtRub(c.deposit - (c.deposit_work || 0))} / {fmtRub(c.deposit || 0)} ₽
                     </p>
                   </div>
                   {[

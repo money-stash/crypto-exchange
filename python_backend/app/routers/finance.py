@@ -505,3 +505,215 @@ async def delete_crypto_purchase(
     await db.execute(text("DELETE FROM crypto_purchases WHERE id = :id"), {"id": purchase_id})
     await db.commit()
     return {"success": True}
+
+
+@router.get("/profit-stats")
+async def get_profit_stats(
+    period: str = Query("day", regex="^(day|week|month)$"),
+    current_user: Support = Depends(require_auth),
+    db: AsyncSession = Depends(get_db),
+):
+    """
+    Чистая прибыль суперадмина по заявкам.
+
+    Формула для обычного оператора (OPERATOR):
+      received_usdt = sum_rub / bb_rate
+      net = received_usdt - per_order_fee - shift_salary_per_order - payout_cost_usdt
+
+    Формула для кассира (CASHIER):
+      received_usdt = sum_rub * (1 - rate_percent/100) / purchase_usdt_rate
+      net = received_usdt - payout_cost_usdt
+    """
+    if current_user.role not in ("SUPERADMIN", "MANAGER"):
+        raise HTTPException(403, "Недостаточно прав")
+
+    period_cond = {
+        "day":   "DATE(o.completed_at) = CURDATE()",
+        "week":  "DATE(o.completed_at) >= CURDATE() - INTERVAL 6 DAY",
+        "month": "DATE(o.completed_at) >= CURDATE() - INTERVAL 29 DAY",
+    }[period]
+
+    # BB rate — текущий рыночный курс USDT (RUB за 1 USDT)
+    usdt_row = await db.execute(text(
+        "SELECT rate_rub, is_manual, manual_rate_rub FROM rates WHERE coin = 'USDT'"
+    ))
+    usdt_rec = usdt_row.mappings().one_or_none()
+    bb_rate = 0.0
+    if usdt_rec:
+        bb_rate = float(
+            usdt_rec["manual_rate_rub"]
+            if usdt_rec["is_manual"] and usdt_rec["manual_rate_rub"]
+            else usdt_rec["rate_rub"] or 0
+        )
+
+    # Закупочные курсы — последняя запись crypto_purchases на каждую монету
+    # usdt_per_coin = amount_usdt / amount_coin  (сколько USDT стоит 1 монета по закупу)
+    # usdt_rate_rub = курс USDT в RUB на момент закупа (используется кассиром)
+    try:
+        purch_rows = await db.execute(text("""
+            SELECT p.coin,
+                   p.amount_usdt / p.amount_coin AS usdt_per_coin,
+                   p.usdt_rate_rub,
+                   p.coin_rate_rub
+            FROM crypto_purchases p
+            INNER JOIN (
+                SELECT coin, MAX(created_at) AS max_ts
+                FROM crypto_purchases
+                GROUP BY coin
+            ) latest ON latest.coin = p.coin AND latest.max_ts = p.created_at
+        """))
+        purchase_rates: dict = {r["coin"]: dict(r._mapping) for r in purch_rows.mappings()}
+    except Exception:
+        purchase_rates = {}
+
+    # Заявки периода (только BUY — клиент платит RUB, получает крипту)
+    try:
+        orders_rows = await db.execute(text(f"""
+            SELECT
+                o.id,
+                o.unique_id,
+                o.coin,
+                o.sum_rub,
+                o.amount_coin,
+                o.completed_at,
+                o.shift_id,
+                sp.id          AS support_id,
+                sp.login       AS support_login,
+                COALESCE(sp.role, 'OPERATOR')            AS support_role,
+                COALESCE(sp.rate_percent, 0)             AS cashier_fee_pct,
+                COALESCE(sp.per_order_rate_usd, 0)       AS per_order_usd,
+                COALESCE(sp.daily_rate_usd, 0)           AS daily_rate_usd
+            FROM orders o
+            LEFT JOIN supports sp ON sp.id = o.support_id
+            WHERE o.status = 'COMPLETED'
+              AND o.dir = 'BUY'
+              AND {period_cond}
+            ORDER BY o.completed_at DESC
+        """))
+        orders = [dict(r._mapping) for r in orders_rows]
+    except Exception as exc:
+        logger.error(f"profit-stats orders query failed: {exc}")
+        orders = []
+
+    # Кол-во заявок в каждой смене (для распределения дневной ставки)
+    shift_order_counts: dict[int, int] = {}
+    for o in orders:
+        sid = o.get("shift_id")
+        if sid:
+            shift_order_counts[sid] = shift_order_counts.get(sid, 0) + 1
+
+    # Расчёт прибыли по каждой заявке
+    result_orders: list[dict] = []
+    total_received   = 0.0
+    total_payout     = 0.0
+    total_op_fees    = 0.0
+    total_shift_cost = 0.0
+    total_net        = 0.0
+
+    for o in orders:
+        coin        = o["coin"]
+        sum_rub     = float(o["sum_rub"]    or 0)
+        amount_coin = float(o["amount_coin"] or 0)
+        role        = o["support_role"]
+        cashier_pct = float(o["cashier_fee_pct"] or 0)
+        per_order   = float(o["per_order_usd"]  or 0)
+        daily_usd   = float(o["daily_rate_usd"] or 0)
+        shift_id    = o.get("shift_id")
+
+        purch            = purchase_rates.get(coin, {})
+        usdt_per_coin    = float(purch.get("usdt_per_coin")  or 0)
+        purch_usdt_rate  = float(purch.get("usdt_rate_rub")  or bb_rate)
+
+        # Стоимость выплаты клиенту (одинакова для всех типов)
+        payout_usdt = amount_coin * usdt_per_coin if usdt_per_coin > 0 else 0.0
+
+        if role == "CASHIER":
+            # Кассир: сумма за минусом своей комиссии, делённая на курс закупа USDT
+            net_rub       = sum_rub * (1.0 - cashier_pct / 100.0)
+            received_usdt = net_rub / purch_usdt_rate if purch_usdt_rate > 0 else 0.0
+            op_fee_usdt   = 0.0
+            shift_usdt    = 0.0
+        else:
+            # Обычный оператор: конвертируем по BB курсу
+            received_usdt = sum_rub / bb_rate if bb_rate > 0 else 0.0
+            op_fee_usdt   = per_order
+            # Доля дневной ставки на одну заявку
+            orders_in_shift = shift_order_counts.get(shift_id, 0) if shift_id else 0
+            shift_usdt = daily_usd / orders_in_shift if orders_in_shift > 0 else 0.0
+
+        net_usdt = received_usdt - op_fee_usdt - shift_usdt - payout_usdt
+
+        total_received   += received_usdt
+        total_payout     += payout_usdt
+        total_op_fees    += op_fee_usdt
+        total_shift_cost += shift_usdt
+        total_net        += net_usdt
+
+        result_orders.append({
+            "order_id":         o["id"],
+            "unique_id":        o["unique_id"],
+            "coin":             coin,
+            "sum_rub":          round(sum_rub, 2),
+            "amount_coin":      amount_coin,
+            "support_login":    o["support_login"],
+            "support_role":     role,
+            "bb_rate":          round(bb_rate, 2),
+            "purchase_usdt_rate": round(purch_usdt_rate, 2),
+            "usdt_per_coin":    round(usdt_per_coin, 4),
+            "received_usdt":    round(received_usdt, 4),
+            "operator_fee_usdt": round(op_fee_usdt, 4),
+            "shift_cost_usdt":  round(shift_usdt, 4),
+            "payout_usdt":      round(payout_usdt, 4),
+            "net_profit_usdt":  round(net_usdt, 4),
+            "completed_at":     str(o["completed_at"]) if o.get("completed_at") else None,
+        })
+
+    # Агрегация по операторам
+    by_operator: dict[str, dict] = {}
+    for r in result_orders:
+        key = r["support_login"] or "—"
+        if key not in by_operator:
+            by_operator[key] = {
+                "login":              key,
+                "role":               r["support_role"],
+                "orders_count":       0,
+                "received_usdt":      0.0,
+                "payout_usdt":        0.0,
+                "operator_fees_usdt": 0.0,
+                "shift_cost_usdt":    0.0,
+                "net_profit_usdt":    0.0,
+            }
+        op = by_operator[key]
+        op["orders_count"]       += 1
+        op["received_usdt"]       = round(op["received_usdt"]      + r["received_usdt"],      4)
+        op["payout_usdt"]         = round(op["payout_usdt"]        + r["payout_usdt"],         4)
+        op["operator_fees_usdt"]  = round(op["operator_fees_usdt"] + r["operator_fee_usdt"],   4)
+        op["shift_cost_usdt"]     = round(op["shift_cost_usdt"]    + r["shift_cost_usdt"],     4)
+        op["net_profit_usdt"]     = round(op["net_profit_usdt"]    + r["net_profit_usdt"],     4)
+
+    return {
+        "period": period,
+        "bb_rate": round(bb_rate, 2),
+        "purchase_rates": {
+            coin: {
+                "usdt_per_coin":   round(float(v.get("usdt_per_coin") or 0), 4),
+                "usdt_rate_rub":   round(float(v.get("usdt_rate_rub") or 0), 2),
+                "coin_rate_rub":   round(float(v.get("coin_rate_rub") or 0), 2),
+            }
+            for coin, v in purchase_rates.items()
+        },
+        "totals": {
+            "orders_count":       len(result_orders),
+            "received_usdt":      round(total_received,   4),
+            "payout_usdt":        round(total_payout,     4),
+            "operator_fees_usdt": round(total_op_fees,    4),
+            "shift_cost_usdt":    round(total_shift_cost, 4),
+            "net_profit_usdt":    round(total_net,        4),
+        },
+        "by_operator": sorted(
+            by_operator.values(),
+            key=lambda x: x["net_profit_usdt"],
+            reverse=True,
+        ),
+        "orders": result_orders,
+    }

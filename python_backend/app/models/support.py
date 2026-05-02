@@ -29,3 +29,4 @@ class Support(Base):
     team_id = Column(BigInteger, nullable=True) # FK cashier_teams.id
     daily_rate_usd    = Column(Numeric(10, 2), default=0)
     per_order_rate_usd = Column(Numeric(10, 2), default=0)
+    can_use_coupons   = Column(Boolean, default=False)

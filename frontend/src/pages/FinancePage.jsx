@@ -2,7 +2,7 @@ import React, { useState, useEffect, useCallback, useRef } from 'react';
 import { financeApi, shiftsApi, ratesApi } from '../services/api';
 import { useAuth } from '../hooks/useAuth';
 import { BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer, CartesianGrid } from 'recharts';
-import { TrendingUp, Download, Calendar, Users, Zap, RefreshCw, Clock, Pencil, Check, X } from 'lucide-react';
+import { TrendingUp, Download, Calendar, Users, Zap, RefreshCw, Clock, Pencil, Check, X, DollarSign } from 'lucide-react';
 import { toast } from 'react-toastify';
 import LoadingSpinner from '../components/LoadingSpinner';
 import ResponsiveTable from '../components/ResponsiveTable';
@@ -272,6 +272,165 @@ function CryptoPurchasesSection() {
   );
 }
 
+function ProfitStatsSection({ period }) {
+  const [data, setData] = useState(null);
+  const [loading, setLoading] = useState(true);
+
+  useEffect(() => {
+    setLoading(true);
+    financeApi.getProfitStats({ period })
+      .then(r => setData(r.data))
+      .catch(() => setData(null))
+      .finally(() => setLoading(false));
+  }, [period]);
+
+  const fmtU = (n) => `$${Number(n || 0).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
+  const fmtDt = (dt) => dt ? new Date(dt).toLocaleString('ru-RU', { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' }) : '—';
+
+  if (loading) return <div className="text-sm text-gray-400 py-4">Загрузка ЧП...</div>;
+  if (!data) return <div className="text-sm text-red-400 py-2">Ошибка загрузки данных ЧП</div>;
+
+  const t = data.totals || {};
+  const roleLabel = (role) => role === 'CASHIER' ? 'Кассир' : 'Оператор';
+  const roleBadge = (role) => role === 'CASHIER'
+    ? 'bg-purple-100 text-purple-700 dark:bg-purple-900/30 dark:text-purple-300'
+    : 'bg-blue-100 text-blue-700 dark:bg-blue-900/30 dark:text-blue-300';
+
+  return (
+    <div className="space-y-4">
+      {/* Информация о курсах */}
+      <div className="flex flex-wrap gap-2 text-xs text-gray-500 dark:text-gray-400">
+        <span className="px-2 py-1 bg-gray-100 dark:bg-gray-800 rounded-lg">
+          BB курс USDT: <b className="text-gray-800 dark:text-gray-200">{Number(data.bb_rate || 0).toFixed(2)} ₽</b>
+        </span>
+        {Object.entries(data.purchase_rates || {}).map(([coin, r]) => (
+          <span key={coin} className="px-2 py-1 bg-gray-100 dark:bg-gray-800 rounded-lg">
+            Закуп {coin}: <b className="text-gray-800 dark:text-gray-200">{Number(r.usdt_per_coin || 0).toLocaleString('en-US', { maximumFractionDigits: 0 })} USDT</b>
+            {r.usdt_rate_rub > 0 && <span> / курс USDT {Number(r.usdt_rate_rub).toFixed(2)} ₽</span>}
+          </span>
+        ))}
+      </div>
+
+      {/* Итоговые карточки ЧП */}
+      <div className="grid grid-cols-2 lg:grid-cols-5 gap-3">
+        <div className="bg-gradient-to-br from-slate-50 to-slate-100/50 dark:from-slate-900/20 dark:to-slate-800/10 border border-slate-200/50 dark:border-slate-700/30 rounded-2xl p-4">
+          <p className="text-xs font-semibold uppercase tracking-wider text-gray-500 dark:text-gray-400 mb-1">Заявок (BUY)</p>
+          <p className="text-2xl font-bold text-slate-600 dark:text-slate-400">{t.orders_count || 0}</p>
+        </div>
+        <div className="bg-gradient-to-br from-blue-50 to-blue-100/50 dark:from-blue-900/20 dark:to-blue-800/10 border border-blue-200/50 dark:border-blue-700/30 rounded-2xl p-4">
+          <p className="text-xs font-semibold uppercase tracking-wider text-gray-500 dark:text-gray-400 mb-1">Поступило</p>
+          <p className="text-2xl font-bold text-blue-600 dark:text-blue-400">{fmtU(t.received_usdt)}</p>
+        </div>
+        <div className="bg-gradient-to-br from-red-50 to-red-100/50 dark:from-red-900/20 dark:to-red-800/10 border border-red-200/50 dark:border-red-700/30 rounded-2xl p-4">
+          <p className="text-xs font-semibold uppercase tracking-wider text-gray-500 dark:text-gray-400 mb-1">Выплачено клиентам</p>
+          <p className="text-2xl font-bold text-red-600 dark:text-red-400">-{fmtU(t.payout_usdt)}</p>
+        </div>
+        <div className="bg-gradient-to-br from-orange-50 to-orange-100/50 dark:from-orange-900/20 dark:to-orange-800/10 border border-orange-200/50 dark:border-orange-700/30 rounded-2xl p-4">
+          <p className="text-xs font-semibold uppercase tracking-wider text-gray-500 dark:text-gray-400 mb-1">Зарплаты</p>
+          <p className="text-2xl font-bold text-orange-600 dark:text-orange-400">
+            -{fmtU((t.operator_fees_usdt || 0) + (t.shift_cost_usdt || 0))}
+          </p>
+          <p className="text-xs text-gray-400 mt-0.5">
+            заявки: {fmtU(t.operator_fees_usdt)} / смены: {fmtU(t.shift_cost_usdt)}
+          </p>
+        </div>
+        <div className="bg-gradient-to-br from-green-50 to-green-100/50 dark:from-green-900/20 dark:to-green-800/10 border border-green-200/50 dark:border-green-700/30 rounded-2xl p-4">
+          <p className="text-xs font-semibold uppercase tracking-wider text-gray-500 dark:text-gray-400 mb-1">Чистая прибыль</p>
+          <p className={`text-2xl font-bold ${Number(t.net_profit_usdt) >= 0 ? 'text-green-600 dark:text-green-400' : 'text-red-500'}`}>
+            {Number(t.net_profit_usdt) >= 0 ? '+' : ''}{fmtU(t.net_profit_usdt)}
+          </p>
+        </div>
+      </div>
+
+      {/* По операторам */}
+      {data.by_operator?.length > 0 && (
+        <div className="overflow-x-auto rounded-xl border border-gray-200 dark:border-gray-700">
+          <table className="w-full text-xs">
+            <thead>
+              <tr className="bg-gray-50 dark:bg-gray-800/50 border-b border-gray-200 dark:border-gray-700">
+                {['Оператор', 'Тип', 'Заявок', 'Поступило', 'Выплачено', 'ЗП (заявки)', 'ЗП (смены)', 'ЧП'].map(h => (
+                  <th key={h} className="px-3 py-2 text-left font-semibold text-gray-500 dark:text-gray-400 uppercase tracking-wider whitespace-nowrap">{h}</th>
+                ))}
+              </tr>
+            </thead>
+            <tbody className="divide-y divide-gray-100 dark:divide-gray-800">
+              {data.by_operator.map((op) => (
+                <tr key={op.login} className="bg-white dark:bg-gray-900 hover:bg-gray-50 dark:hover:bg-gray-800/50">
+                  <td className="px-3 py-2 font-semibold text-gray-800 dark:text-gray-200">{op.login}</td>
+                  <td className="px-3 py-2">
+                    <span className={`px-2 py-0.5 rounded text-[10px] font-semibold uppercase ${roleBadge(op.role)}`}>
+                      {roleLabel(op.role)}
+                    </span>
+                  </td>
+                  <td className="px-3 py-2 font-mono">{op.orders_count}</td>
+                  <td className="px-3 py-2 font-mono text-blue-600 dark:text-blue-400">{fmtU(op.received_usdt)}</td>
+                  <td className="px-3 py-2 font-mono text-red-500">-{fmtU(op.payout_usdt)}</td>
+                  <td className="px-3 py-2 font-mono text-orange-500">
+                    {op.operator_fees_usdt > 0 ? `-${fmtU(op.operator_fees_usdt)}` : '—'}
+                  </td>
+                  <td className="px-3 py-2 font-mono text-orange-400">
+                    {op.shift_cost_usdt > 0 ? `-${fmtU(op.shift_cost_usdt)}` : '—'}
+                  </td>
+                  <td className={`px-3 py-2 font-mono font-bold ${Number(op.net_profit_usdt) >= 0 ? 'text-green-600 dark:text-green-400' : 'text-red-500'}`}>
+                    {Number(op.net_profit_usdt) >= 0 ? '+' : ''}{fmtU(op.net_profit_usdt)}
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      )}
+
+      {/* Детальная таблица заявок */}
+      {data.orders?.length > 0 && (
+        <details className="group">
+          <summary className="cursor-pointer text-xs font-semibold text-gray-500 dark:text-gray-400 hover:text-gray-700 dark:hover:text-gray-300 select-none py-1">
+            ▶ Детально по заявкам ({data.orders.length})
+          </summary>
+          <div className="mt-2 overflow-x-auto rounded-xl border border-gray-200 dark:border-gray-700">
+            <table className="w-full text-xs">
+              <thead>
+                <tr className="bg-gray-50 dark:bg-gray-800/50 border-b border-gray-200 dark:border-gray-700">
+                  {['Дата', 'ID', 'Оператор', 'Тип', 'Монета', 'Сумма ₽', 'Поступило $', 'ЗП $', 'Смена $', 'Выплата $', 'ЧП $'].map(h => (
+                    <th key={h} className="px-3 py-2 text-left font-semibold text-gray-500 dark:text-gray-400 uppercase tracking-wider whitespace-nowrap">{h}</th>
+                  ))}
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-gray-100 dark:divide-gray-800">
+                {data.orders.map(o => (
+                  <tr key={o.order_id} className="bg-white dark:bg-gray-900 hover:bg-gray-50 dark:hover:bg-gray-800/50">
+                    <td className="px-3 py-2 text-gray-500 whitespace-nowrap">{fmtDt(o.completed_at)}</td>
+                    <td className="px-3 py-2 font-mono text-gray-600 dark:text-gray-400">{o.unique_id || o.order_id}</td>
+                    <td className="px-3 py-2 font-semibold text-gray-800 dark:text-gray-200">{o.support_login || '—'}</td>
+                    <td className="px-3 py-2">
+                      <span className={`px-1.5 py-0.5 rounded text-[10px] font-semibold uppercase ${roleBadge(o.support_role)}`}>
+                        {roleLabel(o.support_role)}
+                      </span>
+                    </td>
+                    <td className="px-3 py-2 font-mono font-bold">{o.coin}</td>
+                    <td className="px-3 py-2 font-mono">{Number(o.sum_rub).toLocaleString('ru-RU', { maximumFractionDigits: 0 })} ₽</td>
+                    <td className="px-3 py-2 font-mono text-blue-600 dark:text-blue-400">{fmtU(o.received_usdt)}</td>
+                    <td className="px-3 py-2 font-mono text-orange-500">
+                      {o.operator_fee_usdt > 0 ? `-${fmtU(o.operator_fee_usdt)}` : '—'}
+                    </td>
+                    <td className="px-3 py-2 font-mono text-orange-400">
+                      {o.shift_cost_usdt > 0 ? `-${fmtU(o.shift_cost_usdt)}` : '—'}
+                    </td>
+                    <td className="px-3 py-2 font-mono text-red-500">-{fmtU(o.payout_usdt)}</td>
+                    <td className={`px-3 py-2 font-mono font-bold ${Number(o.net_profit_usdt) >= 0 ? 'text-green-600 dark:text-green-400' : 'text-red-500'}`}>
+                      {Number(o.net_profit_usdt) >= 0 ? '+' : ''}{fmtU(o.net_profit_usdt)}
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </details>
+      )}
+    </div>
+  );
+}
+
 export default function FinancePage() {
   const { user } = useAuth();
   const isSuperAdmin = user?.role === 'SUPERADMIN';
@@ -481,6 +640,17 @@ export default function FinancePage() {
               />
               <StatCard label="Ср. прибыль/сделка" value={`${fmt(totals.avg_profit_rub)} ₽`} color="amber" />
             </div>
+
+            {/* Чистая прибыль (ЧП) */}
+            {isSuperAdmin && (
+              <div className="bg-white dark:bg-gray-900 border border-gray-200 dark:border-gray-700 rounded-2xl p-5">
+                <h3 className="text-sm font-semibold text-gray-700 dark:text-gray-300 mb-4 flex items-center gap-2">
+                  <DollarSign className="w-4 h-4 text-green-500" />
+                  Чистая прибыль (BUY-заявки)
+                </h3>
+                <ProfitStatsSection period={period} />
+              </div>
+            )}
 
             {/* График */}
             {chartData.length > 0 && (

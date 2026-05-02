@@ -1,6 +1,7 @@
 ﻿import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { toast } from 'react-toastify';
-import { MessageCircle, Send, Wifi, WifiOff, ExternalLink, Plus, Paperclip, X } from 'lucide-react';
+import { MessageCircle, Send, Wifi, WifiOff, ExternalLink, Plus, Paperclip, X, Ticket } from 'lucide-react';
+import { couponsApi } from '../services/api';
 import { useNavigate } from 'react-router-dom';
 import api, { operatorManagerChatsApi } from '../services/api';
 import socketService from '../services/socketService';
@@ -262,6 +263,9 @@ const OperatorManagerChat = ({
   const [socketConnected, setSocketConnected] = useState(false);
   const [noManagerAssigned, setNoManagerAssigned] = useState(false);
   const [selectedAttachment, setSelectedAttachment] = useState(null);
+  const [showCouponForm, setShowCouponForm] = useState(false);
+  const [couponForm, setCouponForm] = useState({ brand: 'promo', discount_rub: '', max_uses: 1 });
+  const [creatingCoupon, setCreatingCoupon] = useState(false);
   const messagesContainerRef = useRef(null);
   const attachmentInputRef = useRef(null);
 
@@ -271,7 +275,32 @@ const OperatorManagerChat = ({
   const hideComposerForOperator = false;
   const canShowTabSwitcher = Boolean(showChatTabs && typeof onSwitchTab === 'function');
   const canShowRequisitesAction = Boolean(showRequisitesButton && typeof onOpenRequisites === 'function');
+  const canShowCouponButton = Boolean(currentUser?.can_use_coupons) || roleUpper === 'SUPERADMIN';
   const navigate = useNavigate();
+
+  const handleCreateCoupon = async () => {
+    if (!couponForm.discount_rub || Number(couponForm.discount_rub) <= 0) {
+      toast.error('Укажите скидку');
+      return;
+    }
+    setCreatingCoupon(true);
+    try {
+      const res = await couponsApi.create({
+        brand: couponForm.brand || 'promo',
+        discount_rub: Number(couponForm.discount_rub),
+        max_uses: Number(couponForm.max_uses) || 1,
+      });
+      const code = res.data.code;
+      setNewMessage(prev => (prev ? prev + ' ' : '') + code);
+      setShowCouponForm(false);
+      setCouponForm({ brand: 'promo', discount_rub: '', max_uses: 1 });
+      toast.success(`Промокод создан: ${code}`);
+    } catch (e) {
+      toast.error(e?.response?.data?.detail || 'Ошибка создания промокода');
+    } finally {
+      setCreatingCoupon(false);
+    }
+  };
 
   const openOrder = useCallback((orderId) => {
     const normalizedOrderId = Number(orderId || 0);
@@ -712,6 +741,48 @@ const OperatorManagerChat = ({
               />
             </div>
 
+            {canShowCouponButton && (
+              <div className="relative">
+                <button
+                  type="button"
+                  onClick={() => setShowCouponForm(v => !v)}
+                  className="group relative h-[56px] w-[56px] overflow-hidden bg-purple-500 hover:bg-purple-600 text-white rounded-2xl font-semibold transition-all duration-300 shadow-lg flex items-center justify-center flex-shrink-0 hover:scale-105 active:scale-95"
+                  title="Создать промокод"
+                >
+                  <Ticket className="w-5 h-5 relative z-10" />
+                </button>
+                {showCouponForm && (
+                  <div className="absolute bottom-14 right-0 w-64 bg-white dark:bg-gray-900 border border-gray-200 dark:border-gray-700 rounded-2xl shadow-xl p-4 z-50 space-y-3">
+                    <p className="text-sm font-semibold text-gray-800 dark:text-gray-200">🎟 Создать промокод</p>
+                    <div>
+                      <label className="text-xs text-gray-500 dark:text-gray-400">Бренд</label>
+                      <input className="form-input w-full mt-0.5 text-sm py-1.5" value={couponForm.brand}
+                        onChange={e => setCouponForm(f => ({ ...f, brand: e.target.value }))} placeholder="promo" />
+                    </div>
+                    <div>
+                      <label className="text-xs text-gray-500 dark:text-gray-400">Скидка ₽</label>
+                      <input className="form-input w-full mt-0.5 text-sm py-1.5" type="number" min="1" value={couponForm.discount_rub}
+                        onChange={e => setCouponForm(f => ({ ...f, discount_rub: e.target.value }))} placeholder="500" />
+                    </div>
+                    <div>
+                      <label className="text-xs text-gray-500 dark:text-gray-400">Использований (0 = ∞)</label>
+                      <input className="form-input w-full mt-0.5 text-sm py-1.5" type="number" min="0" value={couponForm.max_uses}
+                        onChange={e => setCouponForm(f => ({ ...f, max_uses: e.target.value }))} />
+                    </div>
+                    <div className="flex gap-2 pt-1">
+                      <button onClick={() => setShowCouponForm(false)}
+                        className="flex-1 py-1.5 text-xs border border-gray-300 dark:border-gray-600 rounded-xl text-gray-600 dark:text-gray-300 hover:bg-gray-50 dark:hover:bg-gray-800 transition-colors">
+                        Отмена
+                      </button>
+                      <button onClick={handleCreateCoupon} disabled={creatingCoupon}
+                        className="flex-1 py-1.5 text-xs bg-purple-600 hover:bg-purple-700 disabled:opacity-60 text-white rounded-xl font-semibold transition-colors">
+                        {creatingCoupon ? '...' : 'Создать'}
+                      </button>
+                    </div>
+                  </div>
+                )}
+              </div>
+            )}
             {canShowRequisitesAction && (
               <button
                 type="button"

@@ -19,7 +19,7 @@ import {
   MoonIcon,
   EnvelopeIcon
 } from '@heroicons/react/24/outline';
-import { ChevronRight, Trophy, Download, MessageCircle, ScrollText, BarChart3 } from 'lucide-react';
+import { ChevronRight, Trophy, Download, MessageCircle, ScrollText, BarChart3, Ticket } from 'lucide-react';
 import { operatorManagerChatsApi } from '../services/api';
 import socketService from '../services/socketService';
 import ShiftButton from './ShiftButton';
@@ -32,6 +32,7 @@ const Layout = () => {
   const canSeePaymentsHistoryMenu = ['OPERATOR', 'MANAGER', 'SUPERADMIN'].includes((user?.role || '').toUpperCase());
   const canSeeOperatorsRatingMenu = (user?.role || '').toUpperCase() !== 'OPERATOR' && !isCashier;
   const canSeeChatsMenu = ['OPERATOR', 'MANAGER', 'SUPERADMIN'].includes((user?.role || '').toUpperCase());
+  const canSeeCouponsMenu = user?.role === 'SUPERADMIN' || (user?.can_use_coupons && !isCashier);
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const [chatsUnreadCount, setChatsUnreadCount] = useState(0);
 
@@ -78,7 +79,6 @@ const Layout = () => {
     { name: 'Статистика', href: '/', icon: HomeIcon },
     { name: 'Заявки', href: '/orders', icon: DocumentTextIcon },
     ...(isCashier ? [{ name: 'Мои карты', href: '/cashier', icon: BanknotesIcon }] : []),
-    ...(canSeePaymentsHistoryMenu ? [{ name: 'Депозит', href: '/payments', icon: BanknotesIcon }] : []),
     ...(user?.role === 'SUPERADMIN'
       ? [{ name: 'Курсы', href: '/rates', icon: CurrencyDollarIcon }]
       : []),
@@ -93,6 +93,7 @@ const Layout = () => {
     ] : []),
     ...((isExAdmin || user?.role === 'SUPERADMIN') ? [{ name: 'Пользователи', href: '/users', icon: UsersIcon }] : []),
     ...(isManager ? [{ name: 'Настройки', href: '/settings', icon: CogIcon }] : []),
+    ...(canSeeCouponsMenu ? [{ name: 'Промокоды', href: '/coupons', icon: Ticket }] : []),
     ...(isAdmin ? [
       { name: 'Сотрудники', href: '/supports', icon: UserGroupIcon },
       { name: 'Автовыдача', href: '/cashiers', icon: CurrencyDollarIcon },

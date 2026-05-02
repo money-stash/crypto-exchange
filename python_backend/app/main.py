@@ -16,7 +16,7 @@ from app.routers import (
     auth, supports, orders, bots, rates, support_chats,
     users, operator_manager_chats, referral_withdrawals,
     audit_logs, settings as settings_router, fees, mailings, uploads,
-    deals, shifts, finance, cashiers,
+    deals, shifts, finance, cashiers, coupons,
 )
 import app.socket.socket_service as socket_service
 from bot.manager import bot_manager
@@ -194,6 +194,7 @@ fastapi_app.include_router(deals.router)
 fastapi_app.include_router(shifts.router)
 fastapi_app.include_router(finance.router)
 fastapi_app.include_router(cashiers.router)
+fastapi_app.include_router(coupons.router)
 
 import os as _os
 _os.makedirs("uploads/chats", exist_ok=True)

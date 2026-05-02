@@ -16,6 +16,7 @@ class UserOut(BaseModel):
     can_write_chat: int = 1
     can_cancel_order: int = 1
     can_edit_requisites: int = 1
+    can_use_coupons: int = 0
     rating: Optional[int] = None
     active_limit: Optional[int] = None
     is_active: Optional[bool] = None

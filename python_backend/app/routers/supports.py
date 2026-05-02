@@ -125,47 +125,179 @@ async def get_operator_orders(
     support_id: int,
     page: int = Query(1, ge=1),
     limit: int = Query(30, ge=1, le=100),
+    date_from: Optional[str] = Query(None),  # YYYY-MM-DD
+    date_to: Optional[str] = Query(None),    # YYYY-MM-DD
     current_user: Support = Depends(require_manager_up),
     db: AsyncSession = Depends(get_db),
 ):
+    # Build date range condition using full datetime to avoid DATE() timezone shift
+    from datetime import datetime, timedelta
+    date_parts = []
+    date_from_dt: Optional[str] = None
+    date_to_dt:   Optional[str] = None
+    if date_from:
+        date_from_dt = date_from + " 00:00:00"
+        date_parts.append("o.completed_at >= :date_from_dt")
+    if date_to:
+        # include the full date_to day
+        dt_to = datetime.strptime(date_to, "%Y-%m-%d") + timedelta(days=1)
+        date_to_dt = dt_to.strftime("%Y-%m-%d 00:00:00")
+        date_parts.append("o.completed_at < :date_to_dt")
+    period_cond = " AND ".join(date_parts) if date_parts else "1=1"
+
     offset = (page - 1) * limit
-    rows = await db.execute(text("""
+
+    # BB rate (RUB per USDT)
+    usdt_row = await db.execute(text(
+        "SELECT rate_rub, is_manual, manual_rate_rub FROM rates WHERE coin = 'USDT'"
+    ))
+    usdt_rec = usdt_row.mappings().one_or_none()
+    bb_rate = 0.0
+    if usdt_rec:
+        bb_rate = float(
+            usdt_rec["manual_rate_rub"]
+            if usdt_rec["is_manual"] and usdt_rec["manual_rate_rub"]
+            else usdt_rec["rate_rub"] or 0
+        )
+
+    # Purchase rates per coin (USDT per 1 coin)
+    try:
+        purch_rows = await db.execute(text("""
+            SELECT p.coin, p.amount_usdt / p.amount_coin AS usdt_per_coin, p.usdt_rate_rub
+            FROM crypto_purchases p
+            INNER JOIN (
+                SELECT coin, MAX(created_at) AS max_ts FROM crypto_purchases GROUP BY coin
+            ) latest ON latest.coin = p.coin AND latest.max_ts = p.created_at
+        """))
+        purchase_rates: dict = {
+            r["coin"]: {"usdt_per_coin": float(r["usdt_per_coin"] or 0), "usdt_rate_rub": float(r["usdt_rate_rub"] or bb_rate)}
+            for r in purch_rows.mappings()
+        }
+    except Exception:
+        purchase_rates = {}
+
+    # Operator role + cashier fee
+    sup_row = await db.execute(
+        text("SELECT role, rate_percent FROM supports WHERE id = :id"), {"id": support_id}
+    )
+    sup = sup_row.mappings().one_or_none()
+    sup_role = (sup["role"] if sup else None) or "OPERATOR"
+    cashier_fee_pct = float(sup["rate_percent"] if sup else 0) or 0.0
+
+    # ── Total volume (all time, only completed)
+    total_vol_row = await db.execute(
+        text("SELECT COALESCE(SUM(sum_rub), 0) FROM orders WHERE support_id = :sid AND status = 'COMPLETED'"),
+        {"sid": support_id},
+    )
+    total_volume_rub = float(total_vol_row.scalar() or 0)
+
+    # Shared params dict for date-range queries
+    date_params: dict = {"sid": support_id}
+    if date_from_dt:
+        date_params["date_from_dt"] = date_from_dt
+    if date_to_dt:
+        date_params["date_to_dt"] = date_to_dt
+
+    # ── Aggregates for period (by dir+coin) — for profit summary
+    period_where = f"o.support_id = :sid AND o.status = 'COMPLETED' AND {period_cond}"
+    agg_rows = await db.execute(
+        text(f"""
+            SELECT o.dir, o.coin,
+                   SUM(o.sum_rub)      AS sum_rub_total,
+                   SUM(o.amount_coin)  AS amount_coin_total
+            FROM orders o
+            WHERE {period_where}
+            GROUP BY o.dir, o.coin
+        """),
+        date_params,
+    )
+    period_volume_rub = 0.0
+    period_profit_usdt = 0.0
+    for agg in agg_rows.mappings():
+        s_rub = float(agg["sum_rub_total"] or 0)
+        a_coin = float(agg["amount_coin_total"] or 0)
+        period_volume_rub += s_rub
+        if agg["dir"] == "BUY":
+            pr = purchase_rates.get(agg["coin"], {})
+            usdt_per_coin = pr.get("usdt_per_coin", 0)
+            purch_usdt_rate = pr.get("usdt_rate_rub", bb_rate) or bb_rate
+            payout_usdt = a_coin * usdt_per_coin
+            if sup_role == "CASHIER":
+                received_usdt = s_rub * (1.0 - cashier_fee_pct / 100.0) / purch_usdt_rate if purch_usdt_rate > 0 else 0.0
+            else:
+                received_usdt = s_rub / bb_rate if bb_rate > 0 else 0.0
+            period_profit_usdt += received_usdt - payout_usdt
+
+    # ── Paginated order list
+    page_params = {**date_params, "lim": limit, "off": offset}
+    rows = await db.execute(text(f"""
         SELECT
-            o.id, o.dir, o.coin, o.sum_rub, o.amount_coin, o.status, o.created_at,
+            o.id, o.unique_id, o.dir, o.coin,
+            o.sum_rub, o.amount_coin, o.rate_rub,
+            o.status, o.created_at, o.completed_at,
             CASE
-                WHEN o.sla_requisites_setup_at IS NOT NULL AND o.sla_started_at IS NOT NULL
-                THEN TIMESTAMPDIFF(SECOND, o.sla_started_at, o.sla_requisites_setup_at)
-            END AS requisite_setup_seconds,
-            CASE
-                WHEN o.completed_at IS NOT NULL AND o.sla_user_paid_at IS NOT NULL
-                THEN TIMESTAMPDIFF(SECOND, o.sla_user_paid_at, o.completed_at)
+                WHEN o.completed_at IS NOT NULL AND o.sla_started_at IS NOT NULL
+                THEN TIMESTAMPDIFF(SECOND, o.sla_started_at, o.completed_at)
             END AS close_seconds
         FROM orders o
-        WHERE o.support_id = :sid
-        ORDER BY o.created_at DESC
+        WHERE {period_where}
+        ORDER BY o.completed_at DESC
         LIMIT :lim OFFSET :off
-    """), {"sid": support_id, "lim": limit, "off": offset})
+    """), page_params)
 
     count_row = await db.execute(
-        text("SELECT COUNT(id) FROM orders WHERE support_id = :sid"), {"sid": support_id}
+        text(f"SELECT COUNT(id) FROM orders o WHERE {period_where}"),
+        date_params,
     )
     total = count_row.scalar() or 0
 
     orders = []
     for r in rows:
+        coin = r.coin
+        sum_rub = float(r.sum_rub or 0)
+        amount_coin = float(r.amount_coin or 0)
+
+        pr = purchase_rates.get(coin, {})
+        usdt_per_coin = pr.get("usdt_per_coin", 0)
+        purch_usdt_rate = pr.get("usdt_rate_rub", bb_rate) or bb_rate
+        payout_usdt = amount_coin * usdt_per_coin
+
+        if r.dir == "BUY":
+            if sup_role == "CASHIER":
+                received_usdt = sum_rub * (1.0 - cashier_fee_pct / 100.0) / purch_usdt_rate if purch_usdt_rate > 0 else 0.0
+            else:
+                received_usdt = sum_rub / bb_rate if bb_rate > 0 else 0.0
+            profit_usdt = round(received_usdt - payout_usdt, 4)
+        else:
+            profit_usdt = None
+
         orders.append({
             "id": r.id,
+            "unique_id": r.unique_id,
             "dir": r.dir,
-            "coin": r.coin,
-            "sum_rub": float(r.sum_rub or 0),
-            "amount_coin": float(r.amount_coin or 0),
+            "coin": coin,
+            "sum_rub": sum_rub,
+            "amount_coin": amount_coin,
+            "rate_rub": float(r.rate_rub or 0),
             "status": r.status,
             "created_at": r.created_at.isoformat() if r.created_at else None,
-            "requisite_setup_seconds": int(r.requisite_setup_seconds) if r.requisite_setup_seconds is not None else None,
+            "completed_at": r.completed_at.isoformat() if r.completed_at else None,
             "close_seconds": int(r.close_seconds) if r.close_seconds is not None else None,
+            "profit_usdt": profit_usdt,
         })
 
-    return {"orders": orders, "total": total, "pages": -(-total // limit), "page": page}
+    return {
+        "orders": orders,
+        "total": total,
+        "pages": -(-total // limit),
+        "page": page,
+        "stats": {
+            "total_volume_rub": total_volume_rub,
+            "period_volume_rub": period_volume_rub,
+            "period_profit_usdt": round(period_profit_usdt, 4),
+            "bb_rate": round(bb_rate, 2),
+        },
+    }
 
 
 # ---------------------------------------------------------------------------
@@ -310,7 +442,7 @@ async def get_supports(
     query = text(f"""
         SELECT
             s.id, s.login, s.role, s.manager_id, s.chat_language,
-            s.can_write_chat, s.can_cancel_order, s.can_edit_requisites,
+            s.can_write_chat, s.can_cancel_order, s.can_edit_requisites, s.can_use_coupons,
             s.is_active, s.active_limit, s.rate_percent, s.rating,
             s.deposit, s.deposit_paid, s.deposit_work, s.created_at,
             COALESCE(os.orders_count, 0) AS orders_count,
@@ -387,6 +519,7 @@ async def create_support(
         can_write_chat=can_write,
         can_cancel_order=can_cancel,
         can_edit_requisites=can_edit,
+        can_use_coupons=_normalize_flag(getattr(body, 'can_use_coupons', 0)),
         rating=100,
         deposit=deposit,
         deposit_paid=0,
@@ -434,7 +567,7 @@ async def get_support_by_id(
     row = await db.execute(text("""
         SELECT
             s.id, s.login, s.role, s.manager_id, s.chat_language,
-            s.can_write_chat, s.can_cancel_order, s.can_edit_requisites,
+            s.can_write_chat, s.can_cancel_order, s.can_edit_requisites, s.can_use_coupons,
             s.is_active, s.active_limit, s.rate_percent, s.rating,
             s.deposit, s.deposit_paid, s.deposit_work, s.created_at,
             COALESCE(os.current_orders, 0) AS current_orders,
@@ -613,6 +746,8 @@ async def update_support(
         support.can_cancel_order = _normalize_flag(body.can_cancel_order)
     if body.can_edit_requisites is not None:
         support.can_edit_requisites = _normalize_flag(body.can_edit_requisites)
+    if body.can_use_coupons is not None:
+        support.can_use_coupons = _normalize_flag(body.can_use_coupons)
 
     if body.password and body.password.strip():
         if len(body.password) < 6:
@@ -803,7 +938,7 @@ async def topup_my_deposit(
         tx_hash = tx_hash.lower()
 
     dup = await db.execute(
-        text("SELECT id, status FROM cashier_deposits WHERE tx_hash = :tx"),
+        text("SELECT id, status, cashier_id FROM cashier_deposits WHERE tx_hash = :tx"),
         {"tx": tx_hash},
     )
     existing = dup.mappings().one_or_none()
@@ -812,6 +947,8 @@ async def topup_my_deposit(
             raise HTTPException(400, "Эта транзакция уже была зачтена")
         elif existing["status"] == "PENDING":
             raise HTTPException(400, "Эта транзакция уже ожидает подтверждения")
+        elif existing["status"] == "REJECTED" and int(existing["cashier_id"]) != current_user.id:
+            raise HTTPException(400, "Этот хеш транзакции уже был использован другим пользователем")
 
     system_address = await _get_deposit_wallet(db, coin)
     if not system_address:

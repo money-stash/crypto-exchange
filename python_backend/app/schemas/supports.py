@@ -12,6 +12,7 @@ class SupportOut(BaseModel):
     can_write_chat: int = 1
     can_cancel_order: int = 1
     can_edit_requisites: int = 1
+    can_use_coupons: int = 0
     is_active: Optional[bool] = None
     active_limit: Optional[int] = None
     rate_percent: Optional[Decimal] = None
@@ -35,6 +36,7 @@ class SupportCreateRequest(BaseModel):
     can_write_chat: int = 1
     can_cancel_order: int = 1
     can_edit_requisites: int = 1
+    can_use_coupons: int = 0
 
 
 class SupportUpdateRequest(BaseModel):
@@ -49,6 +51,7 @@ class SupportUpdateRequest(BaseModel):
     can_write_chat: Optional[int] = None
     can_cancel_order: Optional[int] = None
     can_edit_requisites: Optional[int] = None
+    can_use_coupons: Optional[int] = None
 
 
 class StatusUpdateRequest(BaseModel):

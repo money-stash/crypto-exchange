@@ -509,18 +509,19 @@ CREATE TABLE IF NOT EXISTS cashier_deposits (
 --  27. operator_shifts
 -- ─────────────────────────────────────────────
 CREATE TABLE IF NOT EXISTS operator_shifts (
-    id                  BIGINT AUTO_INCREMENT PRIMARY KEY,
-    support_id          BIGINT NOT NULL,
-    status              VARCHAR(10) DEFAULT 'active',  -- active | closed
+    id                   BIGINT AUTO_INCREMENT PRIMARY KEY,
+    support_id           BIGINT NOT NULL,
+    status               VARCHAR(10) DEFAULT 'active',  -- active | closed
     planned_duration_min INT,
-    orders_completed    INT DEFAULT 0,
-    total_volume_rub    DECIMAL(20,2) DEFAULT 0,
-    total_profit_rub    DECIMAL(14,2) DEFAULT 0,
-    early_close_penalty DECIMAL(14,2) DEFAULT 0,
-    notes               TEXT,
-    started_at          DATETIME,
-    ended_at            DATETIME,
-    created_at          DATETIME DEFAULT NOW(),
+    actual_duration_min  INT,
+    orders_completed     INT DEFAULT 0,
+    total_volume_rub     DECIMAL(20,2) DEFAULT 0,
+    total_profit_rub     DECIMAL(14,2) DEFAULT 0,
+    early_close_penalty  DECIMAL(14,2) DEFAULT 0,
+    notes                TEXT,
+    started_at           DATETIME,
+    ended_at             DATETIME,
+    created_at           DATETIME DEFAULT NOW(),
     INDEX idx_support_id (support_id),
     INDEX idx_status     (status)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
@@ -609,6 +610,38 @@ INSERT IGNORE INTO rates (coin, rate_rub) VALUES
     ('USDT', 0);
 
 -- ─────────────────────────────────────────────
+--  32. coupons  (промокоды)
+-- ─────────────────────────────────────────────
+CREATE TABLE IF NOT EXISTS coupons (
+    id                    BIGINT AUTO_INCREMENT PRIMARY KEY,
+    code                  VARCHAR(64) UNIQUE NOT NULL,
+    brand                 VARCHAR(32) NOT NULL DEFAULT 'promo',
+    discount_rub          DECIMAL(14,2) NOT NULL DEFAULT 0,
+    min_order_rub         DECIMAL(14,2) NOT NULL DEFAULT 0,
+    max_uses              INT NOT NULL DEFAULT 1,
+    used_count            INT NOT NULL DEFAULT 0,
+    assigned_user_id      BIGINT,
+    assigned_tg_id        BIGINT,
+    created_by_support_id BIGINT,
+    is_active             TINYINT(1) DEFAULT 1,
+    expires_at            DATETIME,
+    created_at            DATETIME DEFAULT NOW()
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+
+-- ─────────────────────────────────────────────
+--  33. coupon_usages
+-- ─────────────────────────────────────────────
+CREATE TABLE IF NOT EXISTS coupon_usages (
+    id          BIGINT AUTO_INCREMENT PRIMARY KEY,
+    coupon_id   BIGINT NOT NULL,
+    user_id     BIGINT,
+    order_id    BIGINT,
+    used_at     DATETIME DEFAULT NOW(),
+    INDEX idx_coupon_id (coupon_id),
+    INDEX idx_user_id   (user_id)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+
+-- ─────────────────────────────────────────────
 --  crypto_purchases  (закупки крипты)
 -- ─────────────────────────────────────────────
 CREATE TABLE IF NOT EXISTS crypto_purchases (
@@ -649,8 +682,12 @@ MIGRATIONS = [
     ("cashier_teams", "deposit",                      "DECIMAL(14,2) DEFAULT 0"),
     ("cashier_teams", "deposit_work",                 "DECIMAL(14,2) DEFAULT 0"),
     ("cashier_teams", "deposit_paid",                 "DECIMAL(14,2) DEFAULT 0"),
-    ("supports", "daily_rate_usd",    "DECIMAL(10,2) DEFAULT 0"),
-    ("supports", "per_order_rate_usd", "DECIMAL(10,2) DEFAULT 0"),
+    ("supports", "daily_rate_usd",       "DECIMAL(10,2) DEFAULT 0"),
+    ("supports", "per_order_rate_usd",   "DECIMAL(10,2) DEFAULT 0"),
+    ("operator_shifts", "actual_duration_min", "INT"),
+    ("supports",        "can_use_coupons",      "TINYINT(1) DEFAULT 0"),
+    ("orders",          "coupon_id",             "BIGINT"),
+    ("orders",          "coupon_discount_rub",   "DECIMAL(14,2) DEFAULT 0"),
 ]
 
 

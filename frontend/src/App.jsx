@@ -30,6 +30,7 @@ import AuditLogsPage from './pages/AuditLogsPage';
 import FinancePage from './pages/FinancePage';
 import CashierPage from './pages/CashierPage';
 import CashiersManagementPage from './pages/CashiersManagementPage';
+import CouponsPage from './pages/CouponsPage';
 
 const ProtectedRoute = ({ children, requiredRole = null }) => {
   const { isAuthenticated, user, loading } = useAuth();
@@ -173,6 +174,11 @@ const AppRoutes = () => {
             <Route path="cashiers" element={
               <ProtectedRoute requiredRole="SUPERADMIN">
                 <CashiersManagementPage />
+              </ProtectedRoute>
+            } />
+            <Route path="coupons" element={
+              <ProtectedRoute>
+                <CouponsPage />
               </ProtectedRoute>
             } />
           </Route>

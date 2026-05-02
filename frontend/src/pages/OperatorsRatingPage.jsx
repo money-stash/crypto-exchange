@@ -99,20 +99,36 @@ const OperatorRow = ({ operator, position, onExpand }) => {
   );
 };
 
+const fmtUsdt = (v) => v == null ? '—' : `$${Number(v).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
+
+const toLocalDate = (d) => d.toLocaleDateString('sv-SE'); // YYYY-MM-DD без timezone-сдвига
+
 const OrdersModal = ({ operator, onClose }) => {
   const [orders, setOrders] = useState([]);
   const [loading, setLoading] = useState(true);
   const [page, setPage] = useState(1);
   const [totalPages, setTotalPages] = useState(1);
   const [total, setTotal] = useState(0);
+  const [stats, setStats] = useState(null);
 
-  const fetchOrders = useCallback(async (p) => {
+  // По умолчанию — текущий месяц
+  const today = new Date();
+  const firstOfMonth = new Date(today.getFullYear(), today.getMonth(), 1);
+  const [dateFrom, setDateFrom] = useState(toLocalDate(firstOfMonth));
+  const [dateTo, setDateTo]     = useState(toLocalDate(today));
+
+  const fetchOrders = useCallback(async (p, from, to) => {
     try {
       setLoading(true);
-      const res = await supportsApi.getOperatorOrders(operator.id, { page: p, limit: 30 });
+      const res = await supportsApi.getOperatorOrders(operator.id, {
+        page: p, limit: 30,
+        date_from: from || undefined,
+        date_to:   to   || undefined,
+      });
       setOrders(res.data.orders || []);
       setTotalPages(res.data.pages || 1);
       setTotal(res.data.total || 0);
+      setStats(res.data.stats || null);
     } catch {
       toast.error('Ошибка при загрузке сделок');
     } finally {
@@ -120,36 +136,80 @@ const OrdersModal = ({ operator, onClose }) => {
     }
   }, [operator.id]);
 
+  // Перезагрузка при смене дат — сброс на стр.1
   useEffect(() => {
-    fetchOrders(page);
-  }, [fetchOrders, page]);
+    setPage(1);
+    fetchOrders(1, dateFrom, dateTo);
+  }, [dateFrom, dateTo, fetchOrders]);
 
-  const StatusBadge = ({ status }) => {
-    const s = STATUS_MAP[status] || { label: status, color: 'text-gray-500', icon: AlertCircle };
-    const Icon = s.icon;
-    return (
-      <span className={`inline-flex items-center gap-1 text-xs font-medium ${s.color}`}>
-        <Icon className="w-3.5 h-3.5" />
-        {s.label}
-      </span>
-    );
-  };
+  // Перелистывание страниц
+  useEffect(() => {
+    fetchOrders(page, dateFrom, dateTo);
+  }, [page]); // eslint-disable-line react-hooks/exhaustive-deps
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
       <div className="absolute inset-0 bg-black/40 backdrop-blur-sm" onClick={onClose} />
-      <div className="relative bg-white dark:bg-gray-900 rounded-2xl shadow-2xl border border-gray-200/50 dark:border-gray-700/50 w-full max-w-4xl max-h-[90vh] flex flex-col">
+      <div className="relative bg-white dark:bg-gray-900 rounded-2xl shadow-2xl border border-gray-200/50 dark:border-gray-700/50 w-full max-w-5xl max-h-[90vh] flex flex-col">
+
         {/* шапка */}
-        <div className="flex items-center justify-between px-5 py-4 border-b border-gray-200/50 dark:border-gray-700/50 flex-shrink-0">
-          <div>
-            <h3 className="font-bold text-gray-900 dark:text-gray-100">{operator.username}</h3>
-            <p className="text-xs text-gray-500 dark:text-gray-400 mt-0.5">
-              Всего сделок: {total} · Завершено: {operator.completed_count ?? 0} · Объём: {fmt.rub(operator.total_volume_rub)}
-            </p>
+        <div className="flex items-start justify-between px-5 py-4 border-b border-gray-200/50 dark:border-gray-700/50 flex-shrink-0 gap-4">
+          <div className="min-w-0">
+            <h3 className="font-bold text-gray-900 dark:text-gray-100 text-base">{operator.username}</h3>
+
+            {/* статы */}
+            <div className="flex flex-wrap gap-3 mt-2">
+              <div className="flex flex-col">
+                <span className="text-[10px] uppercase tracking-wider text-gray-400 font-semibold">Объём (всего)</span>
+                <span className="text-sm font-bold text-gray-800 dark:text-gray-200">
+                  {fmt.rub(stats?.total_volume_rub ?? operator.total_volume_rub)}
+                </span>
+              </div>
+              <div className="w-px bg-gray-200 dark:bg-gray-700 self-stretch" />
+              <div className="flex flex-col">
+                <span className="text-[10px] uppercase tracking-wider text-gray-400 font-semibold">Объём за период</span>
+                <span className="text-sm font-bold text-blue-600 dark:text-blue-400">
+                  {fmt.rub(stats?.period_volume_rub ?? 0)}
+                </span>
+              </div>
+              <div className="w-px bg-gray-200 dark:bg-gray-700 self-stretch" />
+              <div className="flex flex-col">
+                <span className="text-[10px] uppercase tracking-wider text-gray-400 font-semibold">ЧП за период</span>
+                <span className={`text-sm font-bold ${Number(stats?.period_profit_usdt ?? 0) >= 0 ? 'text-green-600 dark:text-green-400' : 'text-red-500'}`}>
+                  {fmtUsdt(stats?.period_profit_usdt)}
+                </span>
+              </div>
+              <div className="w-px bg-gray-200 dark:bg-gray-700 self-stretch" />
+              <div className="flex flex-col">
+                <span className="text-[10px] uppercase tracking-wider text-gray-400 font-semibold">Завершённых</span>
+                <span className="text-sm font-bold text-gray-800 dark:text-gray-200">{total}</span>
+              </div>
+            </div>
           </div>
-          <button onClick={onClose} className="p-1.5 rounded-lg hover:bg-gray-100 dark:hover:bg-gray-800 transition-colors">
-            <X className="w-5 h-5 text-gray-500" />
-          </button>
+
+          <div className="flex items-center gap-2 flex-shrink-0">
+            {/* диапазон дат */}
+            <div className="flex items-center gap-1.5 bg-gray-50 dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded-xl px-3 py-1.5">
+              <input
+                type="date"
+                value={dateFrom}
+                max={dateTo || undefined}
+                onChange={e => setDateFrom(e.target.value)}
+                className="text-xs bg-transparent text-gray-700 dark:text-gray-300 focus:outline-none cursor-pointer"
+              />
+              <span className="text-xs text-gray-400">—</span>
+              <input
+                type="date"
+                value={dateTo}
+                min={dateFrom || undefined}
+                onChange={e => setDateTo(e.target.value)}
+                className="text-xs bg-transparent text-gray-700 dark:text-gray-300 focus:outline-none cursor-pointer"
+              />
+            </div>
+            <button onClick={onClose} className="p-1.5 rounded-lg hover:bg-gray-100 dark:hover:bg-gray-800 transition-colors">
+              <X className="w-5 h-5 text-gray-500" />
+            </button>
+          </div>
         </div>
 
         {/* таблица */}
@@ -159,7 +219,7 @@ const OrdersModal = ({ operator, onClose }) => {
               <div className="w-6 h-6 border-2 border-blue-500 border-t-transparent rounded-full animate-spin" />
             </div>
           ) : orders.length === 0 ? (
-            <div className="text-center py-12 text-gray-400">Сделок нет</div>
+            <div className="text-center py-12 text-gray-400">Сделок нет за период</div>
           ) : (
             <table className="w-full text-sm">
               <thead className="sticky top-0 bg-gray-50 dark:bg-gray-800 border-b border-gray-200/50 dark:border-gray-700/50">
@@ -167,43 +227,49 @@ const OrdersModal = ({ operator, onClose }) => {
                   <th className="text-left px-4 py-2.5 text-xs font-semibold text-gray-500 dark:text-gray-400 whitespace-nowrap">Дата</th>
                   <th className="text-left px-4 py-2.5 text-xs font-semibold text-gray-500 dark:text-gray-400 whitespace-nowrap">Направление</th>
                   <th className="text-right px-4 py-2.5 text-xs font-semibold text-gray-500 dark:text-gray-400 whitespace-nowrap">Сумма</th>
-                  <th className="text-center px-4 py-2.5 text-xs font-semibold text-gray-500 dark:text-gray-400 whitespace-nowrap">Выдача реквизита</th>
+                  <th className="text-right px-4 py-2.5 text-xs font-semibold text-gray-500 dark:text-gray-400 whitespace-nowrap">Курс</th>
                   <th className="text-center px-4 py-2.5 text-xs font-semibold text-gray-500 dark:text-gray-400 whitespace-nowrap">Закрытие</th>
-                  <th className="text-left px-4 py-2.5 text-xs font-semibold text-gray-500 dark:text-gray-400 whitespace-nowrap">Статус</th>
+                  <th className="text-right px-4 py-2.5 text-xs font-semibold text-gray-500 dark:text-gray-400 whitespace-nowrap">Прибыль</th>
                 </tr>
               </thead>
               <tbody>
                 {orders.map((o, i) => (
                   <tr key={o.id} className={`border-b border-gray-100 dark:border-gray-800 ${i % 2 === 0 ? '' : 'bg-gray-50/40 dark:bg-gray-800/30'}`}>
-                    <td className="px-4 py-2 text-xs text-gray-500 dark:text-gray-400 whitespace-nowrap">{fmt.datetime(o.created_at)}</td>
+                    <td className="px-4 py-2 text-xs text-gray-500 dark:text-gray-400 whitespace-nowrap">
+                      {fmt.datetime(o.completed_at || o.created_at)}
+                    </td>
                     <td className="px-4 py-2 whitespace-nowrap">
                       <span className={`text-xs font-semibold ${o.dir === 'BUY' ? 'text-green-600 dark:text-green-400' : 'text-blue-600 dark:text-blue-400'}`}>
-                        {o.dir === 'BUY' ? '↑ RUB→CRYPTO' : '↓ CRYPTO→RUB'} {o.coin}
+                        {o.dir === 'BUY' ? '↑ RUB→' : '↓ →RUB'} {o.coin}
                       </span>
                     </td>
                     <td className="px-4 py-2 text-right font-semibold text-gray-900 dark:text-gray-100 whitespace-nowrap text-xs">
                       {fmt.rub(o.sum_rub)}
                     </td>
-                    <td className="px-4 py-2 text-center whitespace-nowrap">
-                      {o.requisite_setup_seconds != null ? (
-                        <span className={`text-xs font-medium ${o.requisite_setup_seconds > 1800 ? 'text-red-500' : o.requisite_setup_seconds > 600 ? 'text-yellow-500' : 'text-green-500'}`}>
-                          {fmt.seconds(o.requisite_setup_seconds)}
-                        </span>
-                      ) : (
-                        <span className="text-xs text-gray-400">—</span>
-                      )}
+                    <td className="px-4 py-2 text-right font-mono text-xs text-gray-600 dark:text-gray-400 whitespace-nowrap">
+                      {o.rate_rub > 0 ? Number(o.rate_rub).toLocaleString('ru-RU', { maximumFractionDigits: 0 }) : '—'}
                     </td>
                     <td className="px-4 py-2 text-center whitespace-nowrap">
                       {o.close_seconds != null ? (
-                        <span className={`text-xs font-medium ${o.close_seconds > 900 ? 'text-red-500' : o.close_seconds > 300 ? 'text-yellow-500' : 'text-green-500'}`}>
+                        <span className={`text-xs font-medium ${
+                          o.close_seconds > 1800 ? 'text-red-500' :
+                          o.close_seconds > 600  ? 'text-yellow-500' :
+                          'text-green-500'
+                        }`}>
                           {fmt.seconds(o.close_seconds)}
                         </span>
                       ) : (
                         <span className="text-xs text-gray-400">—</span>
                       )}
                     </td>
-                    <td className="px-4 py-2 whitespace-nowrap">
-                      <StatusBadge status={o.status} />
+                    <td className="px-4 py-2 text-right whitespace-nowrap">
+                      {o.profit_usdt != null ? (
+                        <span className={`text-xs font-bold ${Number(o.profit_usdt) >= 0 ? 'text-green-600 dark:text-green-400' : 'text-red-500'}`}>
+                          {Number(o.profit_usdt) >= 0 ? '+' : ''}{fmtUsdt(o.profit_usdt)}
+                        </span>
+                      ) : (
+                        <span className="text-xs text-gray-400">—</span>
+                      )}
                     </td>
                   </tr>
                 ))}

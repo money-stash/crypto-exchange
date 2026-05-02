@@ -115,6 +115,32 @@ async def get_quote(
 # Create order
 # ---------------------------------------------------------------------------
 
+async def validate_coupon_for_bot(code: str, tg_id: int, sum_rub: float) -> dict:
+    """Validate coupon from bot. Returns {coupon_id, discount_rub} or raises ValueError."""
+    import datetime
+    async with AsyncSessionLocal() as db:
+        row = await db.execute(text("SELECT * FROM coupons WHERE code = :c"), {"c": code.strip()})
+        coupon = row.mappings().one_or_none()
+
+    if not coupon:
+        raise ValueError("Промокод не найден")
+    if not coupon["is_active"]:
+        raise ValueError("Промокод деактивирован")
+    if coupon["expires_at"] and coupon["expires_at"] < datetime.datetime.now():
+        raise ValueError("Срок действия промокода истёк")
+    if int(coupon["max_uses"]) > 0 and int(coupon["used_count"]) >= int(coupon["max_uses"]):
+        raise ValueError("Промокод уже использован максимальное количество раз")
+    if float(coupon["min_order_rub"]) > 0 and sum_rub < float(coupon["min_order_rub"]):
+        raise ValueError(f"Минимальная сумма для этого промокода: {float(coupon['min_order_rub']):,.0f} ₽")
+    if coupon["assigned_tg_id"] and int(coupon["assigned_tg_id"]) != int(tg_id):
+        raise ValueError("Промокод привязан к другому пользователю")
+
+    return {
+        "coupon_id": int(coupon["id"]),
+        "discount_rub": float(coupon["discount_rub"]),
+    }
+
+
 async def create_order(
     *,
     bot_id: int,
@@ -130,6 +156,8 @@ async def create_order(
     user_card_number: str | None = None,
     user_card_holder: str | None = None,
     user_bank_name: str | None = None,
+    coupon_id: int | None = None,
+    coupon_discount_rub: float = 0.0,
 ) -> dict:
     """Insert order into DB, emit socket event, return order dict."""
     coin = coin.upper()
@@ -163,13 +191,13 @@ async def create_order(
                    amount_coin, rate_rub, fee, ref_percent, user_discount,
                    sum_rub, status,
                    user_crypto_address, user_card_number, user_card_holder, user_bank_name,
-                   bot_id)
+                   bot_id, coupon_id, coupon_discount_rub)
                 VALUES
                   (:uid, :user_id, :user_bot_id, :dir, :coin,
                    :amount_coin, :rate_rub, :fee, 0, 0,
                    :sum_rub, 'QUEUED',
                    :crypto_addr, :card_num, :card_holder, :bank_name,
-                   :bot_id)
+                   :bot_id, :coupon_id, :coupon_discount_rub)
             """),
             {
                 "uid": unique_id,
@@ -186,9 +214,30 @@ async def create_order(
                 "card_holder": user_card_holder,
                 "bank_name": user_bank_name,
                 "bot_id": bot_id,
+                "coupon_id": coupon_id,
+                "coupon_discount_rub": coupon_discount_rub,
             },
         )
+        # Mark coupon used
+        if coupon_id:
+            await db.execute(
+                text("UPDATE coupons SET used_count = used_count + 1 WHERE id = :id"),
+                {"id": coupon_id},
+            )
         await db.commit()
+
+        # Record coupon usage (after commit so order id exists)
+        if coupon_id:
+            last_row = await db.execute(
+                text("SELECT id FROM orders WHERE unique_id = :uid LIMIT 1"), {"uid": unique_id}
+            )
+            order_row = last_row.mappings().one_or_none()
+            if order_row:
+                await db.execute(text("""
+                    INSERT INTO coupon_usages (coupon_id, user_id, order_id)
+                    VALUES (:cid, :uid, :oid)
+                """), {"cid": coupon_id, "uid": user_id, "oid": order_row["id"]})
+                await db.commit()
 
         # Fetch the created order
         row = await db.execute(

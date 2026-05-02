@@ -38,6 +38,7 @@ def support_to_user_out(support: Support) -> UserOut:
         can_write_chat=int(support.can_write_chat if support.can_write_chat is not None else 1),
         can_cancel_order=int(support.can_cancel_order if support.can_cancel_order is not None else 1),
         can_edit_requisites=int(support.can_edit_requisites if support.can_edit_requisites is not None else 1),
+        can_use_coupons=int(support.can_use_coupons if support.can_use_coupons is not None else 0),
         rating=support.rating,
         active_limit=support.active_limit,
         is_active=support.is_active,

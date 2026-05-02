@@ -16,7 +16,7 @@ from aiogram.types import (
 from aiogram.utils.keyboard import InlineKeyboardBuilder
 
 from bot.states.order_states import BuyStates, OrderChatStates
-from bot.order_service import get_quote, create_order, get_user_ids, BUY_COINS
+from bot.order_service import get_quote, create_order, get_user_ids, BUY_COINS, validate_coupon_for_bot
 from bot.requisite_service import save_requisite, get_requisites
 
 router = Router()
@@ -54,9 +54,13 @@ def _address_keyboard(saved: list[dict], coin: str) -> InlineKeyboardMarkup:
     return builder.as_markup()
 
 
-def _summary_keyboard() -> InlineKeyboardMarkup:
+def _summary_keyboard(has_coupon: bool = False) -> InlineKeyboardMarkup:
     builder = InlineKeyboardBuilder()
     builder.row(InlineKeyboardButton(text="✅ Подтвердить", callback_data="buy_confirm"))
+    if not has_coupon:
+        builder.row(InlineKeyboardButton(text="🎟 Применить промокод", callback_data="buy_enter_coupon"))
+    else:
+        builder.row(InlineKeyboardButton(text="🗑 Убрать промокод", callback_data="buy_remove_coupon"))
     builder.row(InlineKeyboardButton(text="🛠 Изменить сумму", callback_data="buy_edit_amount"))
     builder.row(InlineKeyboardButton(text="❌ Отменить", callback_data="buy_cancel"))
     return builder.as_markup()
@@ -279,6 +283,16 @@ async def _show_buy_summary(message: Message, state: FSMContext) -> None:
     sum_rub = data["sum_rub"]
     rate_rub = data["rate_rub"]
     address = data["crypto_address"]
+    coupon_discount = float(data.get("coupon_discount_rub") or 0)
+    has_coupon = bool(data.get("coupon_id"))
+
+    pay_line = f"💳 К оплате: {sum_rub:,.2f} ₽"
+    coupon_line = ""
+    if has_coupon:
+        original = sum_rub + coupon_discount
+        coupon_line = (
+            f"\n🎟 Промокод: <s>{original:,.2f} ₽</s> → скидка -{coupon_discount:,.2f} ₽"
+        )
 
     text = (
         f"📋 <b>Подтверждение заявки</b>\n\n"
@@ -286,14 +300,73 @@ async def _show_buy_summary(message: Message, state: FSMContext) -> None:
         f"🪙 Актив: {coin}\n"
         f"📦 Объём: {amount_coin} {coin}\n"
         f"📈 Курс: {rate_rub:,.0f} ₽\n"
-        f"💳 К оплате: {sum_rub:,.2f} ₽\n\n"
+        f"{pay_line}{coupon_line}\n\n"
         f"📬 Адрес зачисления:\n<code>{address}</code>\n\n"
         f"⌛️ После создания заявки оператор пришлёт реквизиты для оплаты."
     )
-    await message.answer(text, reply_markup=_summary_keyboard(), parse_mode="HTML")
+    await message.answer(text, reply_markup=_summary_keyboard(has_coupon), parse_mode="HTML")
 
 
 # ── Step 4: confirm / edit / cancel ─────────────────────────────────────────
+
+@router.callback_query(lambda c: c.data == "buy_enter_coupon", BuyStates.confirming)
+async def buy_enter_coupon(callback: CallbackQuery, state: FSMContext) -> None:
+    await state.set_state(BuyStates.entering_coupon)
+    builder = InlineKeyboardBuilder()
+    builder.row(InlineKeyboardButton(text="◀️ Назад", callback_data="buy_back_to_summary"))
+    await callback.message.answer(
+        "🎟 <b>Введите промокод:</b>",
+        reply_markup=builder.as_markup(),
+        parse_mode="HTML",
+    )
+    await callback.answer()
+
+
+@router.callback_query(lambda c: c.data == "buy_back_to_summary")
+async def buy_back_to_summary(callback: CallbackQuery, state: FSMContext) -> None:
+    await state.set_state(BuyStates.confirming)
+    await callback.message.delete()
+    await callback.answer()
+
+
+@router.callback_query(lambda c: c.data == "buy_remove_coupon", BuyStates.confirming)
+async def buy_remove_coupon(callback: CallbackQuery, state: FSMContext) -> None:
+    data = await state.get_data()
+    original_sum = float(data.get("sum_rub_original") or data["sum_rub"])
+    await state.update_data(
+        coupon_id=None,
+        coupon_discount_rub=0,
+        sum_rub=original_sum,
+    )
+    await callback.message.delete()
+    await _show_buy_summary(callback.message, state)
+    await callback.answer("Промокод убран")
+
+
+@router.message(BuyStates.entering_coupon)
+async def buy_coupon_entered(message: Message, state: FSMContext) -> None:
+    code = (message.text or "").strip()
+    data = await state.get_data()
+    sum_rub = float(data["sum_rub"])
+
+    try:
+        result = await validate_coupon_for_bot(code, message.from_user.id, sum_rub)
+    except ValueError as e:
+        await message.answer(f"❌ {e}\n\nВведите другой код или нажмите «Назад».")
+        return
+
+    discount = result["discount_rub"]
+    new_sum = max(0.01, sum_rub - discount)
+    await state.update_data(
+        coupon_id=result["coupon_id"],
+        coupon_discount_rub=discount,
+        sum_rub=new_sum,
+        sum_rub_original=sum_rub,
+    )
+    await state.set_state(BuyStates.confirming)
+    await message.answer(f"✅ Промокод применён! Скидка: -{discount:,.2f} ₽")
+    await _show_buy_summary(message, state)
+
 
 @router.callback_query(lambda c: c.data == "buy_confirm", BuyStates.confirming)
 async def buy_confirm(callback: CallbackQuery, state: FSMContext, bot_config: dict) -> None:
@@ -318,6 +391,8 @@ async def buy_confirm(callback: CallbackQuery, state: FSMContext, bot_config: di
             rate_rub=data["rate_rub"],
             fee=data["fee"],
             user_crypto_address=data["crypto_address"],
+            coupon_id=data.get("coupon_id"),
+            coupon_discount_rub=float(data.get("coupon_discount_rub") or 0),
         )
     except ValueError as e:
         await callback.answer(str(e), show_alert=True)
