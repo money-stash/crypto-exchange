@@ -6,7 +6,6 @@ from aiogram.utils.keyboard import InlineKeyboardBuilder
 from sqlalchemy import text
 
 from app.database import AsyncSessionLocal
-from app.services.referral_service import get_first_bonus_rub
 
 router = Router()
 logger = logging.getLogger(__name__)
@@ -36,9 +35,8 @@ async def _get_or_create_user(
     Returns dict with:
       - is_new_referral: True if referrer was linked for the first time
       - referrer_tg_id: tg_id of the referrer (if any)
-      - first_bonus_rub: configured first-bonus amount
     """
-    result = {"is_new_referral": False, "referrer_tg_id": None, "first_bonus_rub": 0.0}
+    result = {"is_new_referral": False, "referrer_tg_id": None}
 
     async with AsyncSessionLocal() as db:
         # Find or create base user
@@ -93,16 +91,13 @@ async def _get_or_create_user(
             )
             result["is_new_referral"] = True
 
-        if result["is_new_referral"]:
-            result["first_bonus_rub"] = await get_first_bonus_rub(db)
-
         await db.commit()
 
     return result
 
 
 @router.message(CommandStart())
-async def cmd_start(message: Message, bot_config: dict, bot: Bot) -> None:
+async def cmd_start(message: Message, bot_config: dict) -> None:
     tg_id = message.from_user.id
     username = message.from_user.username
 
@@ -129,29 +124,6 @@ async def cmd_start(message: Message, bot_config: dict, bot: Bot) -> None:
 
     await message.answer(welcome_text, reply_markup=build_main_menu(bot_config))
 
-    # Notify referrer
-    if referral_result.get("is_new_referral") and referral_result.get("referrer_tg_id"):
-        ref_tg_id = referral_result["referrer_tg_id"]
-        first_bonus = referral_result.get("first_bonus_rub", 0.0)
-        invited_name = f"@{username}" if username else f"пользователь"
-
-        lines = [
-            "🎉 <b>По вашей реферальной ссылке зарегистрировался новый пользователь!</b>",
-            "",
-            f"👤 {invited_name}",
-        ]
-        if first_bonus > 0:
-            lines += [
-                "",
-                f"🎁 Бонус за первый обмен: <b>{first_bonus:,.0f} ₽</b>",
-                "Бонус будет начислен после завершения первой заявки.",
-            ]
-        lines += ["", "Перейдите в Личный раздел → Реферальная программа для деталей."]
-
-        try:
-            await bot.send_message(ref_tg_id, "\n".join(lines))
-        except Exception as e:
-            logger.warning(f"Could not notify referrer {ref_tg_id}: {e}")
 
 
 @router.callback_query(lambda c: c.data == "main_menu")

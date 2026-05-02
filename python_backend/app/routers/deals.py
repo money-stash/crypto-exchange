@@ -588,4 +588,44 @@ async def complete_deal(
     except Exception as e:
         logger.warning(f"Failed to notify user on order {order_id} completion: {e}")
 
+    # Referral bonus + notify referrer
+    try:
+        from app.services.referral_service import process_referral_bonus
+        ub_row = await db.execute(
+            text("SELECT user_bot_id FROM orders WHERE id = :id"), {"id": order_id}
+        )
+        ub_data = ub_row.fetchone()
+        if ub_data and ub_data.user_bot_id:
+            bonus_result = await process_referral_bonus(
+                db=db,
+                order_id=order_id,
+                order_sum=float(updated_order.get("sum_rub") or 0),
+                referred_user_bot_id=ub_data.user_bot_id,
+                bot_id=updated_order.get("bot_id"),
+            )
+            if bonus_result and bonus_result.get("bonus_amount", 0) > 0:
+                ref_row = await db.execute(text("""
+                    SELECT u.tg_id, u2.username AS referred_username
+                    FROM user_bots ub
+                    JOIN users u ON ub.user_id = u.id
+                    JOIN user_bots ub2 ON ub2.id = :referred_ubid
+                    JOIN users u2 ON ub2.user_id = u2.id
+                    WHERE ub.id = :referrer_ubid
+                """), {
+                    "referrer_ubid": bonus_result["referrer_userbot_id"],
+                    "referred_ubid": bonus_result["referred_userbot_id"],
+                })
+                ref_data = ref_row.fetchone()
+                if ref_data and updated_order.get("bot_id"):
+                    amount = bonus_result["bonus_amount"]
+                    uname = f"@{ref_data.referred_username}" if ref_data.referred_username else "пользователя"
+                    await bot_manager.send_message(
+                        updated_order["bot_id"],
+                        int(ref_data.tg_id),
+                        f"💰 <b>+{amount:,.2f} ₽</b> за обмен от {uname}",
+                        parse_mode="HTML",
+                    )
+    except Exception as exc:
+        logger.warning(f"Referral bonus failed for order {order_id}: {exc}")
+
     return {"success": True, "orderDetails": updated_order}
